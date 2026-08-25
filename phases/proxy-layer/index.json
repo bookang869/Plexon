@@ -40,7 +40,7 @@
       "status": "completed",
       "started_at": "2026-08-26T07:46:14+0900",
       "summary": "Added gateway/auth/team_auth.py — get_current_team FastAPI dependency (Header-based Bearer/bare-key lookup against team_api_keys JOIN teams, no in-process cache, ADR-012/ADR-007) returning a Team Pydantic model (id, name, allowed_models, rpm_limit, tpm_limit, daily_budget_usd, monthly_budget_usd, raw config dict); unknown/missing/revoked keys all get a generic 401. Added tests/conftest.py (db_pool + seeded_team/revoked_team fixtures against real Postgres) and tests/test_auth.py.",
-      "completed_at": "2026-08-26T07:52:00+0900"
+      "completed_at": "2026-08-26T07:51:22+0900"
     },
     {
       "step": 5,
