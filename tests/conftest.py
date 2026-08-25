@@ -12,6 +12,9 @@ import uuid
 import pytest_asyncio
 
 os.environ.setdefault("PLEXON_DATABASE_URL", "postgresql://plexon:plexon@localhost:5432/plexon")
+os.environ.setdefault(
+    "PLEXON_CONFIG_PATH", os.path.join(os.path.dirname(__file__), "fixtures", "test_config.yaml")
+)
 
 from gateway.db import close_pool, get_pool, init_pool
 

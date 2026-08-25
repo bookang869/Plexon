@@ -53,7 +53,10 @@
     {
       "step": 6,
       "name": "gateway-routing",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-26T07:53:18+0900",
+      "summary": "Added gateway/providers/registry.py (resolve_provider_for_model: static YAML models-list scan -> cached ProviderAdapter instance, UnknownModelError for 404, no fallback/retry) and gateway/routes.py (POST /v1/chat/completions wiring auth -> allowed-models check -> enrichment/content-filter -> enrich_request -> provider call -> RetryableProviderError/NonRetryableProviderError to 503/502, plus GET /v1/models), wired into gateway/main.py; added tests/fixtures/test_config.yaml and tests/test_routing.py covering 200/403/404/400/401 and /v1/models.",
+      "completed_at": "2026-08-26T08:05:00+0900"
     },
     {
       "step": 7,
