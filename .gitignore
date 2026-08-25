@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.pytest_cache/
+.ruff_cache/
+
+# phase execution outputs
+phases/**/phase*-output.json
+phases/**/step*-output.json
+
+# original assignment brief, kept locally for reference only
+ORIGINAL_BRIEF.md
+
+# Harness build tooling — drives Claude Code sessions locally, not part of the shipped system
+.claude/
+scripts/execute.py
+scripts/test_execute.py
