@@ -54,6 +54,8 @@ class ContentFilterConfig(BaseModel):
 
 
 class EnrichmentDefaults(BaseModel):
+    system_prompt: str | None = None
+    disclaimer: str | None = None
     content_filter: ContentFilterConfig
 
 

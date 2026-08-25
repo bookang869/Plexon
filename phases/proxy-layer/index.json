@@ -45,7 +45,10 @@
     {
       "step": 5,
       "name": "enrichment",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-26T07:51:22+0900",
+      "summary": "Added gateway/enrichment/config.py (resolve_enrichment_config: merges EnrichmentDefaults with team config jsonb -- system_prompt/disclaimer team override replaces global, content_filter.blocklist unions team into global, content_filter.enabled team overrides global), gateway/enrichment/enrich.py (enrich_request: prepends configured system_prompt to an existing system message or inserts a new one, appends disclaimer to the last user message, returns a new ChatCompletionRequest), gateway/enrichment/content_filter.py (check_content_filter: pure case-insensitive substring/regex ('/pattern/') blocklist matcher, no HTTP/exception concerns), extended gateway/config/loader.py's EnrichmentDefaults with optional system_prompt/disclaimer fields, and tests/test_enrichment.py.",
+      "completed_at": "2026-08-26T07:56:40+0900"
     },
     {
       "step": 6,
