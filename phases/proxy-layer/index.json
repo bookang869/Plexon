@@ -13,7 +13,10 @@
     {
       "step": 1,
       "name": "canonical-schema",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-26T07:35:06+0900",
+      "summary": "Added gateway/schemas.py — canonical OpenAI-compatible Pydantic models (ChatMessage, ChatCompletionRequest, Usage, ChatCompletionChoice, ChatCompletionResponse, ChatCompletionChunkDelta, ChatCompletionChunkChoice, ChatCompletionChunk) for provider adapters and gateway routing to import.",
+      "completed_at": "2026-08-25T15:35:58-0700"
     },
     {
       "step": 2,
