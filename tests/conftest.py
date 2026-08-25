@@ -12,7 +12,7 @@ import uuid
 import pytest
 import pytest_asyncio
 
-os.environ.setdefault("PLEXON_DATABASE_URL", "postgresql://plexon:plexon@localhost:5432/plexon")
+os.environ.setdefault("PLEXON_DATABASE_URL", "postgresql://plexon:plexon@localhost:5433/plexon")
 os.environ.setdefault(
     "PLEXON_CONFIG_PATH", os.path.join(os.path.dirname(__file__), "fixtures", "test_config.yaml")
 )
