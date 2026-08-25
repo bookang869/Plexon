@@ -1,0 +1,32 @@
+[project]
+name = "plexon"
+version = "0.1.0"
+description = "LLM Gateway with rate limiting, fallback routing, and observability"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2",
+    "pyyaml",
+    "watchfiles",
+    "asyncpg",
+    "redis",
+    "httpx",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+[tool.ruff]
+line-length = 100
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gateway"]

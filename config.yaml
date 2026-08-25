@@ -1,0 +1,44 @@
+providers:
+  openai:
+    base_url: "http://mock-openai:8080"
+    models: ["gpt-4o", "gpt-4o-mini"]
+  anthropic:
+    base_url: "http://mock-anthropic:8080"
+    models: ["claude-opus", "claude-sonnet"]
+  ollama:
+    base_url: "http://ollama:11434"
+    models: ["llama3"]
+
+fallback_chains:
+  fast_tier: [anthropic:claude-sonnet, openai:gpt-4o-mini, ollama:llama3]
+  frontier_tier: [anthropic:claude-opus, openai:gpt-4o]
+
+circuit_breaker:
+  failure_threshold: 5      # N failures
+  window_seconds: 60        # in M seconds
+  cooldown_seconds: 30      # before half-open probe
+
+health_check:
+  interval_seconds: 30
+
+priority_tiers:
+  realtime:  { rpm_ceiling_pct: 100 }
+  batch:     { rpm_ceiling_pct: 60 }
+
+enrichment_defaults:
+  content_filter:
+    enabled: true
+    blocklist: []            # per-team overrides live in Postgres (teams.config, ADR-021)
+
+# Per-model $/token, real published list prices (ADR-018). Applies uniformly
+# to mocked and real providers alike -- mocking avoids being billed, it
+# doesn't remove the need for a plausible cost figure to enforce budgets against.
+pricing:
+  openai:
+    gpt-4o:       { input_per_1k: 0.0025, output_per_1k: 0.01 }
+    gpt-4o-mini:  { input_per_1k: 0.00015, output_per_1k: 0.0006 }
+  anthropic:
+    claude-opus:   { input_per_1k: 0.015, output_per_1k: 0.075 }
+    claude-sonnet: { input_per_1k: 0.003, output_per_1k: 0.015 }
+  ollama:
+    llama3: { input_per_1k: 0.0, output_per_1k: 0.0 }

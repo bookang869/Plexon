@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: plexon
+      POSTGRES_USER: plexon
+      POSTGRES_PASSWORD: plexon
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plexon -d plexon"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mock-openai:
+    build:
+      context: ..
+      dockerfile: mocks/Dockerfile.openai
+    ports:
+      - "8081:8080"
+
+  mock-anthropic:
+    build:
+      context: ..
+      dockerfile: mocks/Dockerfile.anthropic
+    ports:
+      - "8082:8080"
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      PLEXON_DATABASE_URL: "postgresql://plexon:plexon@postgres:5432/plexon"
+      PLEXON_CONFIG_PATH: "/app/config.yaml"
+    depends_on:
+      - postgres
+      - redis
