@@ -12,7 +12,7 @@ This repository currently holds the planning docs and Harness build scaffolding 
 
 ## Why This Project
 
-Every company with more than one team using LLMs ends up building something like this. It's infrastructure engineering applied to AI: rate limiting, multi-provider failover, and observability — not model-building. See [`ORIGINAL_BRIEF.md`](ORIGINAL_BRIEF.md) for the original assignment this project is derived from (superseded by the docs below).
+Every company with more than one team using LLMs ends up building something like this. It's infrastructure engineering applied to AI: rate limiting, multi-provider failover, and observability — not model-building.
 
 ## Core Features
 
@@ -167,5 +167,3 @@ A final polish phase (demo recording + narrative) is done manually, outside Harn
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Condensed architecture: directory structure, patterns, data flow, state management |
 | [`docs/TRD.md`](docs/TRD.md) | Technical reference: system components, request flow, data model (SQL/Redis schemas), API spec, provider-adapter interface, observability detail, deployment |
 | [`docs/ADR.md`](docs/ADR.md) | Architecture decision records — the rationale behind every major technical choice |
-| [`ORIGINAL_BRIEF.md`](ORIGINAL_BRIEF.md) | Original assignment brief; superseded by the docs above, kept for reference |
-| [`CLAUDE.md`](CLAUDE.md) | Behavioral rules for AI-assisted development on this repo |
