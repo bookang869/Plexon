@@ -1,0 +1,110 @@
+"""Real-time SSE translation with tee/assembly (ADR-009). Provider adapters
+(step 3) already translate each provider's native stream into canonical
+`ChatCompletionChunk`s; this module's job is only to serialize those chunks
+to SSE bytes *as they arrive* and, simultaneously, accumulate them into a
+complete `ChatCompletionResponse` for whatever later phase wants to log/
+observe it (spend ledger, OTel spans -- not this step, see gateway/routes.py).
+
+Usage limitation: no adapter's `chat_completion_stream` carries token usage
+today -- `ChatCompletionChunk` (step 1) has no `usage` field, mock-openai's
+SSE never emits one, and AnthropicAdapter's stream translation drops the
+input/output counts present on Anthropic's native `message_start`/
+`message_delta` events rather than plumbing them through. Until a later
+phase gives streaming chunks somewhere to carry real usage, the assembled
+response's `usage` is a word-count-based best-effort estimate -- the same
+fabrication the mocks already use for their non-streaming responses.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import uuid
+from collections.abc import AsyncIterator, Callable
+
+from gateway.providers.base import ProviderAdapter
+from gateway.providers.errors import ProviderError
+from gateway.schemas import (
+    ChatCompletionChoice,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatMessage,
+    Usage,
+)
+
+
+def _estimate_usage(request: ChatCompletionRequest, completion_text: str) -> Usage:
+    prompt_text = " ".join(m.content for m in request.messages)
+    prompt_tokens = max(1, len(prompt_text.split()))
+    completion_tokens = max(1, len(completion_text.split()))
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+
+
+async def stream_chat_completion(
+    adapter: ProviderAdapter,
+    request: ChatCompletionRequest,
+    on_complete: Callable[[ChatCompletionResponse], None] | None = None,
+) -> AsyncIterator[bytes]:
+    """Yields SSE-formatted bytes (`data: {...}\\n\\n`), ending with
+    `data: [DONE]\\n\\n`. Tees every chunk into an assembled-response buffer
+    as it's yielded; once the stream ends successfully, calls `on_complete`
+    (if given) with the assembled `ChatCompletionResponse`.
+
+    Mid-stream faults: by the time the first chunk is yielded, the HTTP
+    response has already started (status 200, headers sent) -- there's no
+    clean status code left to return if the adapter then raises. Instead of
+    letting the exception propagate into an ASGI server error, this catches
+    `ProviderError` from the adapter's iterator, emits one final chunk
+    carrying an `error` field, then terminates with `[DONE]`. `on_complete`
+    is not called in that case, since no complete response exists.
+    """
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created = int(time.time())
+    model = request.model
+    content_parts: list[str] = []
+    finish_reason: str | None = None
+
+    try:
+        async for chunk in adapter.chat_completion_stream(request):
+            completion_id, created, model = chunk.id, chunk.created, chunk.model
+            for choice in chunk.choices:
+                if choice.delta.content:
+                    content_parts.append(choice.delta.content)
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+            yield f"data: {chunk.model_dump_json()}\n\n".encode()
+    except ProviderError as exc:
+        error_chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [],
+            "error": {"message": str(exc), "type": "provider_error"},
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n".encode()
+        yield b"data: [DONE]\n\n"
+        return
+
+    yield b"data: [DONE]\n\n"
+
+    if on_complete is not None:
+        completion_text = "".join(content_parts)
+        assembled = ChatCompletionResponse(
+            id=completion_id,
+            created=created,
+            model=model,
+            choices=[
+                ChatCompletionChoice(
+                    index=0,
+                    message=ChatMessage(role="assistant", content=completion_text),
+                    finish_reason=finish_reason,
+                )
+            ],
+            usage=_estimate_usage(request, completion_text),
+        )
+        on_complete(assembled)

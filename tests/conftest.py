@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import uuid
 
+import pytest
 import pytest_asyncio
 
 os.environ.setdefault("PLEXON_DATABASE_URL", "postgresql://plexon:plexon@localhost:5432/plexon")
@@ -17,6 +18,22 @@ os.environ.setdefault(
 )
 
 from gateway.db import close_pool, get_pool, init_pool
+from gateway.providers import registry as provider_registry
+
+
+@pytest.fixture(autouse=True)
+def _reset_provider_registry_cache():
+    """gateway/providers/registry.py caches one adapter (and its httpx
+    connection pool) per provider for the life of the process -- correct for
+    the single-instance/single-event-loop production design (ADR-007), but
+    pytest-asyncio gives each test function its own event loop. Without this,
+    a cached adapter's httpx.AsyncClient created in one test's loop gets
+    reused (and its stale pooled connection closed) inside a later test's
+    already-closed loop, blowing up with "Event loop is closed" -- most
+    visibly on streaming requests, which hold a connection open longer.
+    """
+    yield
+    provider_registry._adapters.clear()
 
 
 @pytest_asyncio.fixture

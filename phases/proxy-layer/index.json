@@ -61,7 +61,10 @@
     {
       "step": 7,
       "name": "streaming",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-26T08:10:10+0900",
+      "summary": "Added gateway/streaming.py (stream_chat_completion: real-time per-chunk SSE serialization with a content/finish_reason tee into an on_complete-callback-delivered ChatCompletionResponse using word-count best-effort usage since no adapter's stream carries real usage; mid-stream ProviderError caught and surfaced as a final in-band `error` SSE chunk + [DONE] rather than an ASGI exception), extended gateway/routes.py's POST /v1/chat/completions to branch on request.stream via a shared _prepare_request helper (no duplication of steps 6's auth/allowed-model/enrichment/content-filter logic), and added tests/test_streaming.py (OpenAI/Anthropic SSE well-formedness, content-equivalence with non-streaming, mid-stream fault via a stubbed adapter, non-streaming regression) plus a conftest.py autouse fixture resetting the provider-registry adapter cache between tests to avoid cross-test event-loop reuse of a pooled httpx client -- proxy-layer phase now complete.",
+      "completed_at": "2026-08-26T08:24:00+0900"
     }
   ],
   "created_at": "2026-08-26T07:30:31+0900"

@@ -7,23 +7,29 @@ logging) are later phases' work and are deliberately absent here.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 
 from gateway.auth.team_auth import Team, get_current_team
 from gateway.config.loader import get_config
 from gateway.enrichment.config import resolve_enrichment_config
 from gateway.enrichment.content_filter import check_content_filter
 from gateway.enrichment.enrich import enrich_request
+from gateway.providers.base import ProviderAdapter
 from gateway.providers.errors import NonRetryableProviderError, RetryableProviderError
 from gateway.providers.registry import UnknownModelError, resolve_provider_for_model
 from gateway.schemas import ChatCompletionRequest, ChatCompletionResponse
+from gateway.streaming import stream_chat_completion
 
 router = APIRouter()
 
 
-@router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-async def create_chat_completion(
-    request: ChatCompletionRequest, team: Team = Depends(get_current_team)
-) -> ChatCompletionResponse:
+async def _prepare_request(
+    request: ChatCompletionRequest, team: Team
+) -> tuple[ChatCompletionRequest, ProviderAdapter]:
+    """Steps 2, 5, 6 of TRD §3 (allowed-model check, enrichment/content
+    filter, provider selection) -- shared by both the streaming and
+    non-streaming branches of the handler below.
+    """
     if request.model not in team.allowed_models:
         raise HTTPException(status_code=403, detail="model not allowed for this team")
 
@@ -44,9 +50,26 @@ async def create_chat_completion(
 
     try:
         adapter = resolve_provider_for_model(enriched_request.model, config)
-        return await adapter.chat_completion(enriched_request)
     except UnknownModelError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return enriched_request, adapter
+
+
+@router.post("/v1/chat/completions", response_model=None)
+async def create_chat_completion(
+    request: ChatCompletionRequest, team: Team = Depends(get_current_team)
+) -> ChatCompletionResponse | StreamingResponse:
+    enriched_request, adapter = await _prepare_request(request, team)
+
+    if enriched_request.stream:
+        return StreamingResponse(
+            stream_chat_completion(adapter, enriched_request),
+            media_type="text/event-stream",
+        )
+
+    try:
+        return await adapter.chat_completion(enriched_request)
     except RetryableProviderError as exc:
         # Transient upstream failure (timeout, 429, 5xx) -- the resilience
         # phase will retry/fall back before this mapping is ever reached;
