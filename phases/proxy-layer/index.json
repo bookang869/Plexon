@@ -21,7 +21,10 @@
     {
       "step": 2,
       "name": "mock-providers",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-26T07:36:16+0900",
+      "summary": "Added mocks/fault_injection.py (stateless X-Mock-Fault header / --fault-<type> model-suffix trigger for timeout|error|rate_limit, ADR-025), mocks/mock_openai/app.py (POST /v1/chat/completions on port 8081, OpenAI-shaped non-streaming/SSE responses, word-count-based fabricated usage), mocks/mock_anthropic/app.py (POST /v1/messages on port 8082, Anthropic-native message/event-stream shape, untranslated), mocks/Dockerfile.openai + Dockerfile.anthropic wired into the existing compose stubs, and tests/test_mocks.py.",
+      "completed_at": "2026-08-26T07:45:00+0900"
     },
     {
       "step": 3,
