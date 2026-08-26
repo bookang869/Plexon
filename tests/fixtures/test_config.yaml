@@ -1,0 +1,44 @@
+# Test-only copy of config.yaml: identical except provider base_urls point
+# at localhost (the mock containers' published ports), since tests run the
+# gateway app in-process on the host, not inside the docker-compose network.
+providers:
+  openai:
+    base_url: "http://localhost:8081"
+    models: ["gpt-4o", "gpt-4o-mini"]
+  anthropic:
+    base_url: "http://localhost:8082"
+    models: ["claude-opus", "claude-sonnet"]
+  ollama:
+    base_url: "http://localhost:11434"
+    models: ["llama3"]
+
+fallback_chains:
+  fast_tier: [anthropic:claude-sonnet, openai:gpt-4o-mini, ollama:llama3]
+  frontier_tier: [anthropic:claude-opus, openai:gpt-4o]
+
+circuit_breaker:
+  failure_threshold: 5
+  window_seconds: 60
+  cooldown_seconds: 30
+
+health_check:
+  interval_seconds: 30
+
+priority_tiers:
+  realtime:  { rpm_ceiling_pct: 100 }
+  batch:     { rpm_ceiling_pct: 60 }
+
+enrichment_defaults:
+  content_filter:
+    enabled: true
+    blocklist: ["forbidden-term"]
+
+pricing:
+  openai:
+    gpt-4o:       { input_per_1k: 0.0025, output_per_1k: 0.01 }
+    gpt-4o-mini:  { input_per_1k: 0.00015, output_per_1k: 0.0006 }
+  anthropic:
+    claude-opus:   { input_per_1k: 0.015, output_per_1k: 0.075 }
+    claude-sonnet: { input_per_1k: 0.003, output_per_1k: 0.015 }
+  ollama:
+    llama3: { input_per_1k: 0.0, output_per_1k: 0.0 }

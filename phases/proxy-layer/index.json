@@ -1,0 +1,72 @@
+{
+  "project": "plexon",
+  "phase": "proxy-layer",
+  "steps": [
+    {
+      "step": 0,
+      "name": "project-setup",
+      "status": "completed",
+      "started_at": "2026-08-26T07:30:31+0900",
+      "summary": "Scaffolded pyproject.toml (uv), gateway/ + mocks/ + tests/ package skeleton, deploy/schema.sql (7 tables per TRD §4.1), config.yaml + gateway/config/loader.py (Pydantic + watchfiles hot reload), gateway/db.py (asyncpg pool), gateway/main.py (FastAPI app with /healthz), root Dockerfile, and deploy/docker-compose.yml (gateway, redis, postgres, mock-openai, mock-anthropic).",
+      "completed_at": "2026-08-26T07:35:06+0900"
+    },
+    {
+      "step": 1,
+      "name": "canonical-schema",
+      "status": "completed",
+      "started_at": "2026-08-26T07:35:06+0900",
+      "summary": "Added gateway/schemas.py — canonical OpenAI-compatible Pydantic models (ChatMessage, ChatCompletionRequest, Usage, ChatCompletionChoice, ChatCompletionResponse, ChatCompletionChunkDelta, ChatCompletionChunkChoice, ChatCompletionChunk) for provider adapters and gateway routing to import.",
+      "completed_at": "2026-08-26T07:36:16+0900"
+    },
+    {
+      "step": 2,
+      "name": "mock-providers",
+      "status": "completed",
+      "started_at": "2026-08-26T07:36:16+0900",
+      "summary": "Added mocks/fault_injection.py (stateless X-Mock-Fault header / --fault-<type> model-suffix trigger for timeout|error|rate_limit, ADR-025), mocks/mock_openai/app.py (POST /v1/chat/completions on port 8081, OpenAI-shaped non-streaming/SSE responses, word-count-based fabricated usage), mocks/mock_anthropic/app.py (POST /v1/messages on port 8082, Anthropic-native message/event-stream shape, untranslated), mocks/Dockerfile.openai + Dockerfile.anthropic wired into the existing compose stubs, and tests/test_mocks.py.",
+      "completed_at": "2026-08-26T07:40:11+0900"
+    },
+    {
+      "step": 3,
+      "name": "provider-adapters",
+      "status": "completed",
+      "started_at": "2026-08-26T07:40:12+0900",
+      "summary": "Added gateway/providers/base.py (ProviderAdapter Protocol + HealthStatus), gateway/providers/errors.py (ProviderError/RetryableProviderError/NonRetryableProviderError + raise_for_provider_status/wrap_transport_error helpers), gateway/providers/openai_adapter.py (OpenAIAdapter, near-passthrough with validation), gateway/providers/anthropic_adapter.py (AnthropicAdapter, real translation: system-message hoisting, content-block join, usage/finish_reason remap), gateway/providers/ollama_adapter.py (OllamaAdapter, prompt_eval_count/eval_count → usage translation, tested only via stubbed httpx transport per ADR-017), and tests/test_providers.py.",
+      "completed_at": "2026-08-26T07:46:14+0900"
+    },
+    {
+      "step": 4,
+      "name": "auth",
+      "status": "completed",
+      "started_at": "2026-08-26T07:46:14+0900",
+      "summary": "Added gateway/auth/team_auth.py — get_current_team FastAPI dependency (Header-based Bearer/bare-key lookup against team_api_keys JOIN teams, no in-process cache, ADR-012/ADR-007) returning a Team Pydantic model (id, name, allowed_models, rpm_limit, tpm_limit, daily_budget_usd, monthly_budget_usd, raw config dict); unknown/missing/revoked keys all get a generic 401. Added tests/conftest.py (db_pool + seeded_team/revoked_team fixtures against real Postgres) and tests/test_auth.py.",
+      "completed_at": "2026-08-26T07:51:22+0900"
+    },
+    {
+      "step": 5,
+      "name": "enrichment",
+      "status": "completed",
+      "started_at": "2026-08-26T07:51:22+0900",
+      "summary": "Added gateway/enrichment/config.py (resolve_enrichment_config: merges EnrichmentDefaults with team config jsonb -- system_prompt/disclaimer team override replaces global, content_filter.blocklist unions team into global, content_filter.enabled team overrides global), gateway/enrichment/enrich.py (enrich_request: prepends configured system_prompt to an existing system message or inserts a new one, appends disclaimer to the last user message, returns a new ChatCompletionRequest), gateway/enrichment/content_filter.py (check_content_filter: pure case-insensitive substring/regex ('/pattern/') blocklist matcher, no HTTP/exception concerns), extended gateway/config/loader.py's EnrichmentDefaults with optional system_prompt/disclaimer fields, and tests/test_enrichment.py.",
+      "completed_at": "2026-08-26T07:53:18+0900"
+    },
+    {
+      "step": 6,
+      "name": "gateway-routing",
+      "status": "completed",
+      "started_at": "2026-08-26T07:53:18+0900",
+      "summary": "Added gateway/providers/registry.py (resolve_provider_for_model: static YAML models-list scan -> cached ProviderAdapter instance, UnknownModelError for 404, no fallback/retry) and gateway/routes.py (POST /v1/chat/completions wiring auth -> allowed-models check -> enrichment/content-filter -> enrich_request -> provider call -> RetryableProviderError/NonRetryableProviderError to 503/502, plus GET /v1/models), wired into gateway/main.py; added tests/fixtures/test_config.yaml and tests/test_routing.py covering 200/403/404/400/401 and /v1/models.",
+      "completed_at": "2026-08-26T08:10:10+0900"
+    },
+    {
+      "step": 7,
+      "name": "streaming",
+      "status": "completed",
+      "started_at": "2026-08-26T08:10:10+0900",
+      "summary": "Added gateway/streaming.py (stream_chat_completion: real-time per-chunk SSE serialization with a content/finish_reason tee into an on_complete-callback-delivered ChatCompletionResponse using word-count best-effort usage since no adapter's stream carries real usage; mid-stream ProviderError caught and surfaced as a final in-band `error` SSE chunk + [DONE] rather than an ASGI exception), extended gateway/routes.py's POST /v1/chat/completions to branch on request.stream via a shared _prepare_request helper (no duplication of steps 6's auth/allowed-model/enrichment/content-filter logic), and added tests/test_streaming.py (OpenAI/Anthropic SSE well-formedness, content-equivalence with non-streaming, mid-stream fault via a stubbed adapter, non-streaming regression) plus a conftest.py autouse fixture resetting the provider-registry adapter cache between tests to avoid cross-test event-loop reuse of a pooled httpx client -- proxy-layer phase now complete.",
+      "completed_at": "2026-08-26T08:16:57+0900"
+    }
+  ],
+  "created_at": "2026-08-26T07:30:31+0900",
+  "completed_at": "2026-08-26T08:16:57+0900"
+}
