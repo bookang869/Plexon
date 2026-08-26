@@ -24,34 +24,37 @@ Every company with more than one team using LLMs ends up building something like
 
 ## Architecture
 
+This diagram reflects what's actually built as of the current phase (see [Build Plan](#build-plan)) — it grows one phase at a time rather than showing the end-state up front.
+
 ```mermaid
 flowchart TB
     TC[Team Client]
-    AD[Admin / Operator]
 
-    GW["Gateway — FastAPI (stateless)\nauth → rate limit → budget → enrichment → route/retry/breaker → response"]
+    subgraph GW["Gateway — FastAPI"]
+        direction LR
+        AUTH["Auth\nteam API key"]
+        ENR["Enrichment\nprompts + content filter"]
+        SEL["Provider Select\nmodel → provider"]
+        RESP["Response\nnon-stream / SSE"]
+        AUTH --> ENR --> SEL --> RESP
+    end
 
-    REDIS[("Redis\nhot-path state")]
-    PG[("PostgreSQL\ndurable state")]
-    YAML["YAML Config\nhot-reloaded"]
-    PROV["Providers\nOpenAI · Anthropic · Ollama"]
-    OBS["OpenTelemetry + Prometheus"]
-    GRAF["Grafana"]
-    SLACK["Slack Alerts"]
+    PG[("PostgreSQL\nteam config + API keys")]
+    YAML["YAML Config\nprovider/model map"]
+    PROV["Providers\nOpenAI (mock) · Anthropic (mock) · Ollama (real)"]
+    LATER["Not yet built:\nrate limit / budget (Redis)\ncircuit breaker + retry/fallback\nadmin API · observability"]
 
-    TC --> GW
-    AD --> GW
-    GW --> REDIS
-    GW --> PG
-    GW --> YAML
-    GW --> PROV
-    GW --> OBS --> GRAF --> SLACK
+    TC --> AUTH
+    RESP --> TC
+    AUTH <--> PG
+    SEL <--> YAML
+    SEL --> PROV
 
-    classDef store fill:#f0b64c,stroke:#a8710a,color:#1a1a1a;
-    class REDIS,PG store;
+    classDef later fill:none,stroke:#999,stroke-dasharray: 4 3,color:#999;
+    class LATER later;
 ```
 
-The gateway request pipeline, in order: auth (team API key) → rate-limit check (Redis, per-tier ceiling) → budget check (Redis + Postgres) → enrichment (system prompt / content filter) → provider selection (YAML fallback chain + circuit-breaker state) → provider call (retry w/ backoff → fallback on exhaustion) → response translation, with a spend-ledger write and OTel span/Prometheus metrics on the way out. Streaming follows the same path through provider selection, then translates each provider's native stream chunks to OpenAI-style SSE in real time while teeing into a buffer for the post-stream log/metrics write. Full detail in [`docs/TRD.md`](docs/TRD.md) §3.
+`auth` and `enrichment` read from Postgres (team keys, per-team `config jsonb`); `provider select` reads the static YAML model→provider map and calls the adapter directly — no fallback-chain walking or retry yet. Streaming translates each provider's native stream chunks to OpenAI-style SSE in real time. Rate limiting, budget enforcement, circuit breaking, the admin API, and observability land in later phases and will be added to this diagram as they're built. Full end-state request-flow spec in [`docs/TRD.md`](docs/TRD.md) §3.
 
 **State is split three ways, by change frequency and durability:**
 
