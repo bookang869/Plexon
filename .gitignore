@@ -13,6 +13,9 @@ phases/**/step*-output.json
 # original assignment brief, kept locally for reference only
 ORIGINAL_BRIEF.md
 
+# behavioral guidelines for AI-assisted development, kept locally only
+CLAUDE.md
+
 # Harness build tooling — drives Claude Code sessions locally, not part of the shipped system
 .claude/
 scripts/execute.py
