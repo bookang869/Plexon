@@ -21,7 +21,10 @@
     {
       "step": 2,
       "name": "budget-enforcement",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-27T11:22:06+0900",
+      "summary": "Added gateway/ratelimit/budget.py: compute_cost(usage, provider, model, pricing) -> Decimal (raises ValueError on missing pricing entry), BudgetStatus, check_budget(team) (reads Redis daily/monthly counters at spend:{team_id}:{daily,monthly}:{period} keyed by UTC date/month with TTLs past period end, compares against team.daily_budget_usd/monthly_budget_usd, None fields never block/warn), and record_spend (dual-write: Redis INCRBYFLOAT fast-path counters + spend_ledger INSERT as source of truth, Postgres failure logged via logger.exception without raising). Wired into gateway/routes.py's create_chat_completion right after the rate-limit check: check_budget raises HTTPException(402) when blocked (distinct from rate-limiting's 429); an X-Budget-Warning: true header is attached (via the injected Response for non-streaming, via StreamingResponse headers for streaming) when warned-but-not-blocked; after a successful response, cost is computed from the response's own usage/model and the already-resolved provider name (registry.resolve_provider_for_model now returns (name, adapter)) and recorded via the same non-streaming-return/streaming-on_complete hook points step 1 used for reconcile_tpm. tests/test_budget.py covers under-budget ledger-row arithmetic, 402 + no-ledger-row on exhausted daily budget, X-Budget-Warning at 80-100% utilization, unlimited (None/None) teams never blocking/warning, and compute_cost's ValueError on unpriced provider/model. Fixed a pre-existing FK-ordering gap surfaced by real ledger writes: tests/conftest.py's seeded_team and tests/test_priority_tiers.py's _delete_team now delete spend_ledger rows before deleting the team.",
+      "completed_at": "2026-08-27T12:05:00+0900"
     },
     {
       "step": 3,

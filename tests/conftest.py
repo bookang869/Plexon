@@ -83,6 +83,7 @@ async def seeded_team(db_pool):
 
     yield {"team_id": team_id, "api_key": api_key}
 
+    await db_pool.execute("DELETE FROM spend_ledger WHERE team_id = $1", team_id)
     await db_pool.execute("DELETE FROM team_api_keys WHERE team_id = $1", team_id)
     await db_pool.execute("DELETE FROM teams WHERE id = $1", team_id)
 

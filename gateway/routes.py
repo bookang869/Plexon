@@ -1,13 +1,13 @@
-"""Gateway request routes -- TRD §3 steps 1, 2, 3, 5, 6, 7, 8, 10 (receipt,
-auth, rate-limit check, enrichment, provider selection, call, response
-translation, delivery). Step 4 (budget check) and step 9 (spend-ledger +
-OTel/metrics logging) are later phases' work and are deliberately absent
-here.
+"""Gateway request routes -- TRD §3 steps 1, 2, 3, 4, 5, 6, 7, 8, 9 (partial),
+10 (receipt, auth, rate-limit check, budget check, enrichment, provider
+selection, call, response translation, spend-ledger write, delivery). The
+rest of step 9 (OTel spans/Prometheus metrics) is a later phase's work and is
+deliberately absent here.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
 from gateway.auth.team_auth import Team, get_current_team
@@ -18,6 +18,7 @@ from gateway.enrichment.enrich import enrich_request
 from gateway.providers.base import ProviderAdapter
 from gateway.providers.errors import NonRetryableProviderError, RetryableProviderError
 from gateway.providers.registry import UnknownModelError, resolve_provider_for_model
+from gateway.ratelimit.budget import check_budget, compute_cost, record_spend
 from gateway.ratelimit.limiter import check_rate_limit, estimate_tokens, reconcile_tpm, resolve_tier
 from gateway.schemas import ChatCompletionRequest, ChatCompletionResponse
 from gateway.streaming import stream_chat_completion
@@ -27,7 +28,7 @@ router = APIRouter()
 
 async def _prepare_request(
     request: ChatCompletionRequest, team: Team
-) -> tuple[ChatCompletionRequest, ProviderAdapter]:
+) -> tuple[ChatCompletionRequest, str, ProviderAdapter]:
     """Steps 2, 5, 6 of TRD §3 (allowed-model check, enrichment/content
     filter, provider selection) -- shared by both the streaming and
     non-streaming branches of the handler below.
@@ -51,16 +52,17 @@ async def _prepare_request(
     enriched_request = enrich_request(request, enrichment_config)
 
     try:
-        adapter = resolve_provider_for_model(enriched_request.model, config)
+        provider_name, adapter = resolve_provider_for_model(enriched_request.model, config)
     except UnknownModelError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    return enriched_request, adapter
+    return enriched_request, provider_name, adapter
 
 
 @router.post("/v1/chat/completions", response_model=None)
 async def create_chat_completion(
     request: ChatCompletionRequest,
+    response: Response,
     team: Team = Depends(get_current_team),
     x_priority: str | None = Header(default=None, alias="X-Priority"),
 ) -> ChatCompletionResponse | StreamingResponse:
@@ -78,19 +80,32 @@ async def create_chat_completion(
             headers={"Retry-After": str(decision.retry_after_seconds)},
         )
 
-    enriched_request, adapter = await _prepare_request(request, team)
+    # TRD §3 step 4 (budget check) -- deliberately a 402, distinct from
+    # rate-limiting's 429, so callers/tests can tell "out of budget" apart
+    # from "sending too fast".
+    budget_status = await check_budget(team)
+    if budget_status.blocked:
+        raise HTTPException(status_code=402, detail="budget exceeded")
+
+    enriched_request, provider_name, adapter = await _prepare_request(request, team)
+
+    async def _record_spend(completed: ChatCompletionResponse) -> None:
+        cost = compute_cost(completed.usage, provider_name, completed.model, get_config().pricing)
+        await record_spend(team, provider_name, completed.model, completed.usage, cost, completed.id)
 
     if enriched_request.stream:
-        async def _on_complete(response: ChatCompletionResponse) -> None:
-            await reconcile_tpm(team, tier, estimated_tokens, response.usage.total_tokens)
+        async def _on_complete(completed: ChatCompletionResponse) -> None:
+            await reconcile_tpm(team, tier, estimated_tokens, completed.usage.total_tokens)
+            await _record_spend(completed)
 
         return StreamingResponse(
             stream_chat_completion(adapter, enriched_request, on_complete=_on_complete),
             media_type="text/event-stream",
+            headers={"X-Budget-Warning": "true"} if budget_status.warning else None,
         )
 
     try:
-        response = await adapter.chat_completion(enriched_request)
+        completion = await adapter.chat_completion(enriched_request)
     except RetryableProviderError as exc:
         # Transient upstream failure (timeout, 429, 5xx) -- the resilience
         # phase will retry/fall back before this mapping is ever reached;
@@ -102,8 +117,11 @@ async def create_chat_completion(
         # content policy) -- not something a retry would fix.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    await reconcile_tpm(team, tier, estimated_tokens, response.usage.total_tokens)
-    return response
+    await reconcile_tpm(team, tier, estimated_tokens, completion.usage.total_tokens)
+    await _record_spend(completion)
+    if budget_status.warning:
+        response.headers["X-Budget-Warning"] = "true"
+    return completion
 
 
 @router.get("/v1/models")
