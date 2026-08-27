@@ -4,14 +4,17 @@ from fastapi import FastAPI
 
 from gateway.config.loader import start_config_watcher
 from gateway.db import close_pool, init_pool
+from gateway.redis_client import close_redis, init_redis
 from gateway.routes import router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_pool()
+    await init_redis()
     start_config_watcher()
     yield
+    await close_redis()
     await close_pool()
 
 

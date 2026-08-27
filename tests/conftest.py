@@ -13,12 +13,14 @@ import pytest
 import pytest_asyncio
 
 os.environ.setdefault("PLEXON_DATABASE_URL", "postgresql://plexon:plexon@localhost:5433/plexon")
+os.environ.setdefault("PLEXON_REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault(
     "PLEXON_CONFIG_PATH", os.path.join(os.path.dirname(__file__), "fixtures", "test_config.yaml")
 )
 
 from gateway.db import close_pool, get_pool, init_pool
 from gateway.providers import registry as provider_registry
+from gateway.redis_client import close_redis, get_redis, init_redis
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +43,13 @@ async def db_pool():
     await init_pool()
     yield get_pool()
     await close_pool()
+
+
+@pytest_asyncio.fixture
+async def redis_client():
+    await init_redis()
+    yield get_redis()
+    await close_redis()
 
 
 @pytest_asyncio.fixture

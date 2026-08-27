@@ -1,0 +1,29 @@
+{
+  "project": "plexon",
+  "phase": "ratelimit-budget",
+  "steps": [
+    {
+      "step": 0,
+      "name": "rate-limiter-core",
+      "status": "completed",
+      "started_at": "2026-08-27T11:08:56+0900",
+      "summary": "Added gateway/redis_client.py (init_redis/close_redis/get_redis, mirrors db.py, PLEXON_REDIS_URL required, wired into main.py lifespan and deploy/docker-compose.yml gateway env) and gateway/ratelimit/token_bucket.py: check_and_consume(redis, key, capacity, refill_per_second, cost=1.0, ttl_seconds=120) -> BucketResult(allowed, remaining, retry_after_seconds) and refund(redis, key, capacity, amount) -> None, both atomic via a single Lua EVAL (redis.register_script) reading Redis TIME internally, storing tokens/ts in a per-key hash; tests/test_token_bucket.py covers capacity/deny, refill, 15-way concurrency (no over-admission), refund capping, and variable cost."
+    },
+    {
+      "step": 1,
+      "name": "priority-tiers",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "budget-enforcement",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "admin-api",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-08-27T11:08:56+0900"
+}

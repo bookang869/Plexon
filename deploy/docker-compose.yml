@@ -48,6 +48,7 @@ services:
     environment:
       PLEXON_DATABASE_URL: "postgresql://plexon:plexon@postgres:5432/plexon"
       PLEXON_CONFIG_PATH: "/app/config.yaml"
+      PLEXON_REDIS_URL: "redis://redis:6379/0"
     depends_on:
       - postgres
       - redis
