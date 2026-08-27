@@ -29,7 +29,10 @@
     {
       "step": 3,
       "name": "admin-api",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-27T11:28:32+0900",
+      "summary": "Added gateway/auth/admin_auth.py (get_current_admin, mirrors team_auth.py exactly: Bearer/bare token, direct admin_tokens lookup, revoked_at IS NULL required, generic 401) and gateway/admin/routes.py implementing TRD §6.2's six endpoints under APIRouter(prefix='/admin'), wired into gateway/main.py alongside the gateway router: GET .../status (per-tier rpm/tpm remaining via check_and_consume cost=0 peeks against step 1's bucket keys, plus check_budget from step 2); PATCH .../limits (partial update via body.model_dump(exclude_unset=True), writes audit_log with before/after of only the changed fields); GET .../spend (spend_ledger aggregated by day and by provider/model over a 30-day window); POST /teams (creates the team row, mints one opaque team_api_keys token via secrets.token_urlsafe(32) -- the only place this step mints a key, no rotation endpoint added -- and writes an audit_log row); GET /audit-log (most-recent-100, optional team_id filter); POST /config/reload (calls the new shared gateway/config/loader.reload_config(), refactored out of both the file-watch loop and this endpoint so there's one reload code path -- the manual endpoint propagates parse/validation failures as 400 instead of the watcher's silent keep-previous-config behavior). tests/test_admin.py covers 401 across all six endpoints (missing/unknown/revoked, parametrized) against a new admin_token/revoked_admin_token conftest fixture pair, team creation + generated-key round-trip through team_auth.get_current_team, partial-update audit-log correctness, status reflecting seeded rate-limit/budget consumption, audit-log ordering/filtering, and manual reload success + 400-on-invalid-YAML without corrupting the live config -- marking the ratelimit-budget phase complete.",
+      "completed_at": "2026-08-27T11:41:15+0900"
     }
   ],
   "created_at": "2026-08-27T11:08:56+0900"

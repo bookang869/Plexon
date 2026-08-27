@@ -100,16 +100,26 @@ def get_config() -> GatewayConfig:
     return _config
 
 
-async def _watch_loop() -> None:
+def reload_config() -> None:
+    """Loads config from disk and swaps it in. Raises on parse/validation
+    failure -- callers decide whether to swallow that (the background
+    file-watch loop, which logs and keeps the previous config) or propagate
+    it (the manual /admin/config/reload endpoint, which should tell the
+    admin the reload failed rather than silently no-op'ing).
+    """
     global _config
+    _config = _load_from_disk()
+
+
+async def _watch_loop() -> None:
     async for _ in awatch(_config_path()):
         try:
-            _config = _load_from_disk()
+            reload_config()
         except Exception:
             logger.exception("failed to reload config from %s; keeping previous config", _config_path())
 
 
 def start_config_watcher() -> None:
-    global _config, _watch_task
-    _config = _load_from_disk()
+    global _watch_task
+    reload_config()
     _watch_task = asyncio.create_task(_watch_loop())

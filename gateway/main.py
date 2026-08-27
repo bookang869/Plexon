@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from gateway.admin.routes import router as admin_router
 from gateway.config.loader import start_config_watcher
 from gateway.db import close_pool, init_pool
 from gateway.redis_client import close_redis, init_redis
@@ -20,6 +21,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(router)
+app.include_router(admin_router)
 
 
 @app.get("/healthz")

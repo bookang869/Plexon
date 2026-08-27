@@ -89,6 +89,39 @@ async def seeded_team(db_pool):
 
 
 @pytest_asyncio.fixture
+async def admin_token(db_pool):
+    """Inserts a live admin token directly via the pool (there's no admin
+    endpoint to create one through), tears it down after.
+    """
+    token = f"admin-test-{uuid.uuid4().hex}"
+    admin_name = "test-admin"
+
+    await db_pool.execute(
+        "INSERT INTO admin_tokens (token, admin_name) VALUES ($1, $2)", token, admin_name
+    )
+
+    yield {"token": token, "admin_name": admin_name}
+
+    await db_pool.execute("DELETE FROM admin_tokens WHERE token = $1", token)
+
+
+@pytest_asyncio.fixture
+async def revoked_admin_token(db_pool):
+    """An admin token that's already revoked."""
+    token = f"admin-test-{uuid.uuid4().hex}"
+
+    await db_pool.execute(
+        "INSERT INTO admin_tokens (token, admin_name, revoked_at) VALUES ($1, $2, now())",
+        token,
+        "revoked-admin",
+    )
+
+    yield {"token": token}
+
+    await db_pool.execute("DELETE FROM admin_tokens WHERE token = $1", token)
+
+
+@pytest_asyncio.fixture
 async def revoked_team(db_pool):
     """A team whose only API key is already revoked."""
     team_id = f"team-test-{uuid.uuid4().hex[:8]}"
