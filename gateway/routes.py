@@ -1,12 +1,13 @@
-"""Gateway request routes -- TRD §3 steps 1, 2, 5, 6, 7, 8, 10 (receipt,
-auth, enrichment, provider selection, call, response translation, delivery).
-Steps 3/4 (rate-limit/budget check) and step 9 (spend-ledger + OTel/metrics
-logging) are later phases' work and are deliberately absent here.
+"""Gateway request routes -- TRD §3 steps 1, 2, 3, 5, 6, 7, 8, 10 (receipt,
+auth, rate-limit check, enrichment, provider selection, call, response
+translation, delivery). Step 4 (budget check) and step 9 (spend-ledger +
+OTel/metrics logging) are later phases' work and are deliberately absent
+here.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from gateway.auth.team_auth import Team, get_current_team
@@ -17,6 +18,7 @@ from gateway.enrichment.enrich import enrich_request
 from gateway.providers.base import ProviderAdapter
 from gateway.providers.errors import NonRetryableProviderError, RetryableProviderError
 from gateway.providers.registry import UnknownModelError, resolve_provider_for_model
+from gateway.ratelimit.limiter import check_rate_limit, estimate_tokens, reconcile_tpm, resolve_tier
 from gateway.schemas import ChatCompletionRequest, ChatCompletionResponse
 from gateway.streaming import stream_chat_completion
 
@@ -58,18 +60,37 @@ async def _prepare_request(
 
 @router.post("/v1/chat/completions", response_model=None)
 async def create_chat_completion(
-    request: ChatCompletionRequest, team: Team = Depends(get_current_team)
+    request: ChatCompletionRequest,
+    team: Team = Depends(get_current_team),
+    x_priority: str | None = Header(default=None, alias="X-Priority"),
 ) -> ChatCompletionResponse | StreamingResponse:
+    # TRD §3 step 3 (rate-limit check) runs before step 5/6 (enrichment,
+    # provider selection) below -- ADR-020's X-Priority header, defaulting to
+    # "realtime", picks the tier; ADR-011's per-tier ceiling is enforced via
+    # gateway/ratelimit/limiter.py against the buckets Redis already owns.
+    tier = resolve_tier(x_priority, get_config())
+    estimated_tokens = estimate_tokens(request)
+    decision = await check_rate_limit(team, tier, estimated_tokens)
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="rate limit exceeded",
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+        )
+
     enriched_request, adapter = await _prepare_request(request, team)
 
     if enriched_request.stream:
+        async def _on_complete(response: ChatCompletionResponse) -> None:
+            await reconcile_tpm(team, tier, estimated_tokens, response.usage.total_tokens)
+
         return StreamingResponse(
-            stream_chat_completion(adapter, enriched_request),
+            stream_chat_completion(adapter, enriched_request, on_complete=_on_complete),
             media_type="text/event-stream",
         )
 
     try:
-        return await adapter.chat_completion(enriched_request)
+        response = await adapter.chat_completion(enriched_request)
     except RetryableProviderError as exc:
         # Transient upstream failure (timeout, 429, 5xx) -- the resilience
         # phase will retry/fall back before this mapping is ever reached;
@@ -80,6 +101,9 @@ async def create_chat_completion(
         # Upstream rejected our forwarded request outright (auth failure,
         # content policy) -- not something a retry would fix.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    await reconcile_tpm(team, tier, estimated_tokens, response.usage.total_tokens)
+    return response
 
 
 @router.get("/v1/models")

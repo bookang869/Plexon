@@ -17,10 +17,11 @@ fabrication the mocks already use for their non-streaming responses.
 
 from __future__ import annotations
 
+import inspect
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 from gateway.providers.base import ProviderAdapter
 from gateway.providers.errors import ProviderError
@@ -47,12 +48,14 @@ def _estimate_usage(request: ChatCompletionRequest, completion_text: str) -> Usa
 async def stream_chat_completion(
     adapter: ProviderAdapter,
     request: ChatCompletionRequest,
-    on_complete: Callable[[ChatCompletionResponse], None] | None = None,
+    on_complete: Callable[[ChatCompletionResponse], Awaitable[None] | None] | None = None,
 ) -> AsyncIterator[bytes]:
     """Yields SSE-formatted bytes (`data: {...}\\n\\n`), ending with
     `data: [DONE]\\n\\n`. Tees every chunk into an assembled-response buffer
     as it's yielded; once the stream ends successfully, calls `on_complete`
-    (if given) with the assembled `ChatCompletionResponse`.
+    (if given) with the assembled `ChatCompletionResponse`. `on_complete` may
+    be sync or async -- an awaitable return value is awaited, a bare `None`
+    is not.
 
     Mid-stream faults: by the time the first chunk is yielded, the HTTP
     response has already started (status 200, headers sent) -- there's no
@@ -107,4 +110,6 @@ async def stream_chat_completion(
             ],
             usage=_estimate_usage(request, completion_text),
         )
-        on_complete(assembled)
+        result = on_complete(assembled)
+        if inspect.isawaitable(result):
+            await result
