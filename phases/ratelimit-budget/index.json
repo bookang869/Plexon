@@ -1,0 +1,40 @@
+{
+  "project": "plexon",
+  "phase": "ratelimit-budget",
+  "steps": [
+    {
+      "step": 0,
+      "name": "rate-limiter-core",
+      "status": "completed",
+      "started_at": "2026-08-27T11:08:56+0900",
+      "summary": "Added gateway/redis_client.py (init_redis/close_redis/get_redis, mirrors db.py, PLEXON_REDIS_URL required, wired into main.py lifespan and deploy/docker-compose.yml gateway env) and gateway/ratelimit/token_bucket.py: check_and_consume(redis, key, capacity, refill_per_second, cost=1.0, ttl_seconds=120) -> BucketResult(allowed, remaining, retry_after_seconds) and refund(redis, key, capacity, amount) -> None, both atomic via a single Lua EVAL (redis.register_script) reading Redis TIME internally, storing tokens/ts in a per-key hash; tests/test_token_bucket.py covers capacity/deny, refill, 15-way concurrency (no over-admission), refund capping, and variable cost.",
+      "completed_at": "2026-08-27T11:14:02+0900"
+    },
+    {
+      "step": 1,
+      "name": "priority-tiers",
+      "status": "completed",
+      "started_at": "2026-08-27T11:14:02+0900",
+      "summary": "Added gateway/ratelimit/limiter.py: resolve_tier (X-Priority header -> tier, 400 on unknown tier), estimate_tokens (word-count prompt + max_tokens-or-1024 heuristic), RateLimitDecision, check_rate_limit (per-tier rpm then tpm token_bucket checks at ratelimit:{team_id}:{tier}:{rpm,tpm}, sized from team.rpm_limit/tpm_limit * config.priority_tiers[tier].rpm_ceiling_pct, with rpm refund-rollback if the tpm check denies), and reconcile_tpm (post-response tpm refund when actual usage < estimate, no-op otherwise). Wired into gateway/routes.py's create_chat_completion: rate-limit check runs right after auth and before _prepare_request's enrichment/provider-selection, raising 429+Retry-After on denial; reconcile_tpm runs after a successful non-streaming response and via a new on_complete callback on the streaming path. gateway/streaming.py's stream_chat_completion now awaits on_complete's return value if it's awaitable (backward-compatible with existing sync callbacks). tests/test_priority_tiers.py covers rpm admission/429, batch-vs-realtime ceiling difference, unknown-tier 400, tpm-denial rpm rollback, and non-streaming/streaming tpm reconciliation; tests/test_routing.py and tests/test_streaming.py's client fixtures now also init Redis since every request touches it.",
+      "completed_at": "2026-08-27T11:22:06+0900"
+    },
+    {
+      "step": 2,
+      "name": "budget-enforcement",
+      "status": "completed",
+      "started_at": "2026-08-27T11:22:06+0900",
+      "summary": "Added gateway/ratelimit/budget.py: compute_cost(usage, provider, model, pricing) -> Decimal (raises ValueError on missing pricing entry), BudgetStatus, check_budget(team) (reads Redis daily/monthly counters at spend:{team_id}:{daily,monthly}:{period} keyed by UTC date/month with TTLs past period end, compares against team.daily_budget_usd/monthly_budget_usd, None fields never block/warn), and record_spend (dual-write: Redis INCRBYFLOAT fast-path counters + spend_ledger INSERT as source of truth, Postgres failure logged via logger.exception without raising). Wired into gateway/routes.py's create_chat_completion right after the rate-limit check: check_budget raises HTTPException(402) when blocked (distinct from rate-limiting's 429); an X-Budget-Warning: true header is attached (via the injected Response for non-streaming, via StreamingResponse headers for streaming) when warned-but-not-blocked; after a successful response, cost is computed from the response's own usage/model and the already-resolved provider name (registry.resolve_provider_for_model now returns (name, adapter)) and recorded via the same non-streaming-return/streaming-on_complete hook points step 1 used for reconcile_tpm. tests/test_budget.py covers under-budget ledger-row arithmetic, 402 + no-ledger-row on exhausted daily budget, X-Budget-Warning at 80-100% utilization, unlimited (None/None) teams never blocking/warning, and compute_cost's ValueError on unpriced provider/model. Fixed a pre-existing FK-ordering gap surfaced by real ledger writes: tests/conftest.py's seeded_team and tests/test_priority_tiers.py's _delete_team now delete spend_ledger rows before deleting the team.",
+      "completed_at": "2026-08-27T11:28:31+0900"
+    },
+    {
+      "step": 3,
+      "name": "admin-api",
+      "status": "completed",
+      "started_at": "2026-08-27T11:28:32+0900",
+      "summary": "Added gateway/auth/admin_auth.py (get_current_admin, mirrors team_auth.py exactly: Bearer/bare token, direct admin_tokens lookup, revoked_at IS NULL required, generic 401) and gateway/admin/routes.py implementing TRD §6.2's six endpoints under APIRouter(prefix='/admin'), wired into gateway/main.py alongside the gateway router: GET .../status (per-tier rpm/tpm remaining via check_and_consume cost=0 peeks against step 1's bucket keys, plus check_budget from step 2); PATCH .../limits (partial update via body.model_dump(exclude_unset=True), writes audit_log with before/after of only the changed fields); GET .../spend (spend_ledger aggregated by day and by provider/model over a 30-day window); POST /teams (creates the team row, mints one opaque team_api_keys token via secrets.token_urlsafe(32) -- the only place this step mints a key, no rotation endpoint added -- and writes an audit_log row); GET /audit-log (most-recent-100, optional team_id filter); POST /config/reload (calls the new shared gateway/config/loader.reload_config(), refactored out of both the file-watch loop and this endpoint so there's one reload code path -- the manual endpoint propagates parse/validation failures as 400 instead of the watcher's silent keep-previous-config behavior). tests/test_admin.py covers 401 across all six endpoints (missing/unknown/revoked, parametrized) against a new admin_token/revoked_admin_token conftest fixture pair, team creation + generated-key round-trip through team_auth.get_current_team, partial-update audit-log correctness, status reflecting seeded rate-limit/budget consumption, audit-log ordering/filtering, and manual reload success + 400-on-invalid-YAML without corrupting the live config -- marking the ratelimit-budget phase complete.",
+      "completed_at": "2026-08-27T11:36:30+0900"
+    }
+  ],
+  "created_at": "2026-08-27T11:08:56+0900",
+  "completed_at": "2026-08-27T11:36:30+0900"
+}

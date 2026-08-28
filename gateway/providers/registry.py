@@ -40,9 +40,9 @@ def _get_adapter(name: str, base_url: str) -> ProviderAdapter:
     return _adapters[name]
 
 
-def resolve_provider_for_model(model: str, config: GatewayConfig) -> ProviderAdapter:
+def resolve_provider_for_model(model: str, config: GatewayConfig) -> tuple[str, ProviderAdapter]:
     for name in _ADAPTER_CLASSES:
         provider_config = getattr(config.providers, name)
         if model in provider_config.models:
-            return _get_adapter(name, provider_config.base_url)
+            return name, _get_adapter(name, provider_config.base_url)
     raise UnknownModelError(model)

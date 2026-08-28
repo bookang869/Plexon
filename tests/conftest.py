@@ -13,12 +13,14 @@ import pytest
 import pytest_asyncio
 
 os.environ.setdefault("PLEXON_DATABASE_URL", "postgresql://plexon:plexon@localhost:5433/plexon")
+os.environ.setdefault("PLEXON_REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault(
     "PLEXON_CONFIG_PATH", os.path.join(os.path.dirname(__file__), "fixtures", "test_config.yaml")
 )
 
 from gateway.db import close_pool, get_pool, init_pool
 from gateway.providers import registry as provider_registry
+from gateway.redis_client import close_redis, get_redis, init_redis
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +43,13 @@ async def db_pool():
     await init_pool()
     yield get_pool()
     await close_pool()
+
+
+@pytest_asyncio.fixture
+async def redis_client():
+    await init_redis()
+    yield get_redis()
+    await close_redis()
 
 
 @pytest_asyncio.fixture
@@ -74,8 +83,42 @@ async def seeded_team(db_pool):
 
     yield {"team_id": team_id, "api_key": api_key}
 
+    await db_pool.execute("DELETE FROM spend_ledger WHERE team_id = $1", team_id)
     await db_pool.execute("DELETE FROM team_api_keys WHERE team_id = $1", team_id)
     await db_pool.execute("DELETE FROM teams WHERE id = $1", team_id)
+
+
+@pytest_asyncio.fixture
+async def admin_token(db_pool):
+    """Inserts a live admin token directly via the pool (there's no admin
+    endpoint to create one through), tears it down after.
+    """
+    token = f"admin-test-{uuid.uuid4().hex}"
+    admin_name = "test-admin"
+
+    await db_pool.execute(
+        "INSERT INTO admin_tokens (token, admin_name) VALUES ($1, $2)", token, admin_name
+    )
+
+    yield {"token": token, "admin_name": admin_name}
+
+    await db_pool.execute("DELETE FROM admin_tokens WHERE token = $1", token)
+
+
+@pytest_asyncio.fixture
+async def revoked_admin_token(db_pool):
+    """An admin token that's already revoked."""
+    token = f"admin-test-{uuid.uuid4().hex}"
+
+    await db_pool.execute(
+        "INSERT INTO admin_tokens (token, admin_name, revoked_at) VALUES ($1, $2, now())",
+        token,
+        "revoked-admin",
+    )
+
+    yield {"token": token}
+
+    await db_pool.execute("DELETE FROM admin_tokens WHERE token = $1", token)
 
 
 @pytest_asyncio.fixture

@@ -36,7 +36,7 @@ _config_loaded = False
 
 
 @pytest_asyncio.fixture
-async def client(db_pool):
+async def client(db_pool, redis_client):
     global _config_loaded
     if not _config_loaded:
         start_config_watcher()

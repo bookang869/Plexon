@@ -8,7 +8,7 @@ Callers talk to Plexon exactly like they'd talk to OpenAI's Chat Completions API
 
 ## Status
 
-This repository currently holds the planning docs and Harness build scaffolding (`scripts/execute.py`, `phases/`); the gateway implementation itself is being built phase by phase — see [Build Plan](#build-plan) below for progress.
+Phase 0 (`proxy-layer`) is merged; phase 1 (`ratelimit-budget`) is complete and in this PR — the gateway proxies, authenticates, rate-limits, and enforces budget today. Resilience, observability, and the load-tested full stack are still ahead — see [Build Plan](#build-plan) below for progress.
 
 ## Why This Project
 
@@ -29,32 +29,53 @@ This diagram reflects what's actually built as of the current phase (see [Build 
 ```mermaid
 flowchart TB
     TC[Team Client]
+    OP[Operator]
 
     subgraph GW["Gateway — FastAPI"]
         direction LR
         AUTH["Auth\nteam API key"]
+        RATE["Rate Limit ★\ntiered token bucket"]
+        BUDGET["Budget Check ★\ndaily / monthly spend"]
         ENR["Enrichment\nprompts + content filter"]
         SEL["Provider Select\nmodel → provider"]
         RESP["Response\nnon-stream / SSE"]
-        AUTH --> ENR --> SEL --> RESP
+        LEDGER["Reconcile + Spend ★\nrefund + ledger write"]
+        AUTH --> RATE --> BUDGET --> ENR --> SEL --> RESP --> LEDGER
     end
 
-    PG[("PostgreSQL\nteam config + API keys")]
-    YAML["YAML Config\nprovider/model map"]
+    subgraph ADM["Admin API ★"]
+        direction LR
+        AAUTH["Admin Auth\nadmin token"]
+        AROUTES["limits · spend ·\nteams · audit-log"]
+        AAUTH --> AROUTES
+    end
+
+    REDIS[("Redis\ntoken buckets + spend counters")]
+    PG[("PostgreSQL\nteam config, spend ledger, audit log")]
+    YAML["YAML Config\nprovider/model map + pricing"]
     PROV["Providers\nOpenAI (mock) · Anthropic (mock) · Ollama (real)"]
-    LATER["Not yet built:\nrate limit / budget (Redis)\ncircuit breaker + retry/fallback\nadmin API · observability"]
+    LATER["Not yet built:\ncircuit breaker + retry/fallback\nhealth checks · observability"]
 
     TC --> AUTH
-    RESP --> TC
+    LEDGER --> TC
+    OP --> AAUTH
     AUTH <--> PG
+    RATE <--> REDIS
+    BUDGET <--> REDIS
+    LEDGER <--> REDIS
+    LEDGER <--> PG
+    AROUTES <--> PG
     SEL <--> YAML
     SEL --> PROV
 
+    classDef new fill:#0f948814,stroke:#0f9488,stroke-width:1.5px,color:inherit;
+    class RATE,BUDGET,LEDGER,ADM,AAUTH,AROUTES new;
     classDef later fill:none,stroke:#999,stroke-dasharray: 4 3,color:#999;
     class LATER later;
 ```
+★ = added this phase (`ratelimit-budget`)
 
-`auth` and `enrichment` read from Postgres (team keys, per-team `config jsonb`); `provider select` reads the static YAML model→provider map and calls the adapter directly — no fallback-chain walking or retry yet. Streaming translates each provider's native stream chunks to OpenAI-style SSE in real time. Rate limiting, budget enforcement, circuit breaking, the admin API, and observability land in later phases and will be added to this diagram as they're built. Full end-state request-flow spec in [`docs/TRD.md`](docs/TRD.md) §3.
+`auth` reads Postgres for team keys/config; `rate limit` and `budget check` run against Redis before the request is allowed to proceed (429 / 402 respectively), gating `enrichment` and `provider select` exactly like before. After the provider responds, `reconcile + spend` refunds any over-reserved token-bucket capacity and writes the real cost to Redis (fast counter) and Postgres (`spend_ledger`, source of truth). The admin API is a separate authenticated path — a distinct token type from team keys — used to manage limits, inspect spend, provision teams, and read the audit log. Streaming translates each provider's native stream chunks to OpenAI-style SSE in real time, with the same reconcile/ledger step running once the stream completes. Circuit breaking, retry/fallback, health checks, and observability land in later phases and will be added to this diagram as they're built. Full end-state request-flow spec in [`docs/TRD.md`](docs/TRD.md) §3.
 
 **State is split three ways, by change frequency and durability:**
 
@@ -146,13 +167,13 @@ python3 scripts/setup_demo_teams.py              # seed demo teams with varied r
 
 Implementation is split into 5 [Harness](.claude/commands/harness.md) phases, each on its own `feat-{phase}` branch, run via `scripts/execute.py`:
 
-| # | Phase | Covers |
-|---|---|---|
-| 0 | `proxy-layer` | Project setup, provider abstraction, auth/routing, streaming passthrough, enrichment |
-| 1 | `ratelimit-budget` | Token buckets, budget caps, tiered limits, admin API |
-| 2 | `resilience` | Health checks, fallback routing, retry/backoff, circuit breakers |
-| 3 | `observability` | OTel spans, Prometheus metrics, Grafana dashboards, alerting |
-| 4 | `test-load` | Integration test suite, Locust load test, full Docker Compose stack |
+| # | Phase | Covers | Status |
+|---|---|---|---|
+| 0 | `proxy-layer` | Project setup, provider abstraction, auth/routing, streaming passthrough, enrichment | ✅ merged |
+| 1 | `ratelimit-budget` | Token buckets, budget caps, tiered limits, admin API | 🔨 this PR |
+| 2 | `resilience` | Health checks, fallback routing, retry/backoff, circuit breakers | ⏳ not started |
+| 3 | `observability` | OTel spans, Prometheus metrics, Grafana dashboards, alerting | ⏳ not started |
+| 4 | `test-load` | Integration test suite, Locust load test, full Docker Compose stack | ⏳ not started |
 
 A final polish phase (demo recording + narrative) is done manually, outside Harness.
 

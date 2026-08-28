@@ -1,7 +1,9 @@
 """Tests for gateway/routes.py + gateway/providers/registry.py -- the direct
 auth -> enrich -> provider -> response path (TRD §3 steps 1,2,5,6,7,8,10).
 Runs against the real app (in-process) and the real mock-openai/mock-anthropic
-containers (`docker compose up -d postgres mock-openai mock-anthropic`).
+containers (`docker compose up -d redis postgres mock-openai mock-anthropic`)
+-- Redis is required since every request now passes through the rate-limit
+check (gateway/ratelimit/limiter.py).
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ _config_loaded = False
 
 
 @pytest_asyncio.fixture
-async def client(db_pool):
+async def client(db_pool, redis_client):
     global _config_loaded
     if not _config_loaded:
         start_config_watcher()
