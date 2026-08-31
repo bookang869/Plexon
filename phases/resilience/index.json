@@ -13,7 +13,10 @@
     {
       "step": 1,
       "name": "fallback-retry-nonstreaming",
-      "status": "pending"
+      "status": "error",
+      "started_at": "2026-09-01T08:39:56+0900",
+      "error_message": "[failed after 3 attempts] Step did not update status",
+      "failed_at": "2026-09-01T08:40:02+0900"
     },
     {
       "step": 2,
