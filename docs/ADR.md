@@ -110,6 +110,8 @@ Rate-limit counters themselves are never persisted to Postgres — they're meani
 
 **Consequences:** Slightly more code than importing a library, but a stronger interview talking point ("I understand and implemented the pattern"), and avoids unnecessary Redis-coordination complexity that wouldn't reflect standard real-world practice anyway.
 
+**Superseded — Redis-Backed (resilience phase implementation):** The in-process design conflicts with ADR-007's CRITICAL rule (restated in CLAUDE.md) that no important state — explicitly including circuit-breaker state — may live only in a single process's memory. `docs/TRD.md`'s Redis key schema (`breaker:{provider}:state`, `breaker:{provider}:failures`) and `docs/ARCHITECTURE.md`'s State Management section already assumed Redis-backed breaker state, so the in-process choice above was inconsistent with the rest of the design even before this reversal. Circuit breaker state now lives in Redis (this file), atomically transitioned via Lua scripts (same pattern as `gateway/ratelimit/token_bucket.py`), consistent with every other piece of hot-path state in the system.
+
 ---
 
 ### ADR-011: Tiered Rate Limiting — Threshold Ceilings, Not a Queue
