@@ -16,7 +16,7 @@
       "status": "completed",
       "started_at": "2026-09-01T11:34:17+0900",
       "summary": "Added gateway/resilience/fallback.py's `resolve_fallback_chain(provider, model, config) -> list[tuple[str, str]]` (pure, degrade-from-position); gateway/providers/registry.py's `get_adapter_for_provider(provider, config) -> ProviderAdapter` (reuses _get_adapter cache); gateway/resilience/orchestrator.py's `resolve_with_resilience(primary_provider: str, primary_model: str, request: ChatCompletionRequest, config: GatewayConfig, redis: Redis, attempt: Callable[[str, ProviderAdapter, ChatCompletionRequest], Awaitable[T]]) -> tuple[str, str, T]` (generic breaker-check -> retry-primary(3x via tenacity)/1-attempt-fallback-or-probe -> record_success/record_failure walk, reusable as-is by step 2's streaming attempt) and its non-streaming wrapper `call_with_resilience(request, provider, model, adapter, config, redis) -> tuple[str, ChatCompletionResponse]`; wired into routes.py's non-streaming branch, fixing `_record_spend` to take an explicit provider param so cost/spend-ledger writes use the serving provider (which may be a fallback) rather than the originally-resolved one; added tenacity>=9 to pyproject.toml deps (uv lock/sync run). All AC tests (tests/test_fallback.py, tests/test_orchestrator.py, tests/test_routing.py) plus full existing suite (181 tests) pass; ruff clean.",
-      "completed_at": "2026-09-01T12:05:44+0900"
+      "completed_at": "2026-09-01T11:46:06+0900"
     },
     {
       "step": 2,
