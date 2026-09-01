@@ -15,6 +15,7 @@ from gateway.config.loader import get_config
 from gateway.enrichment.config import resolve_enrichment_config
 from gateway.enrichment.content_filter import check_content_filter
 from gateway.enrichment.enrich import enrich_request
+from gateway.observability import tracing
 from gateway.providers.base import ProviderAdapter
 from gateway.providers.errors import NonRetryableProviderError, RetryableProviderError
 from gateway.providers.registry import UnknownModelError, resolve_provider_for_model
@@ -38,25 +39,29 @@ async def _prepare_request(
     if request.model not in team.allowed_models:
         raise HTTPException(status_code=403, detail="model not allowed for this team")
 
-    config = get_config()
-    enrichment_config = resolve_enrichment_config(config.enrichment_defaults, team.config)
+    with tracing.get_tracer().start_as_current_span("provider_selection") as span:
+        span.set_attribute("team_id", team.id)
+        span.set_attribute("model_requested", request.model)
 
-    filter_result = check_content_filter(request, enrichment_config.content_filter)
-    if filter_result.blocked:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "request blocked by content filter",
-                "matched_terms": len(filter_result.matched_terms),
-            },
-        )
+        config = get_config()
+        enrichment_config = resolve_enrichment_config(config.enrichment_defaults, team.config)
 
-    enriched_request = enrich_request(request, enrichment_config)
+        filter_result = check_content_filter(request, enrichment_config.content_filter)
+        if filter_result.blocked:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "request blocked by content filter",
+                    "matched_terms": len(filter_result.matched_terms),
+                },
+            )
 
-    try:
-        provider_name, adapter = resolve_provider_for_model(enriched_request.model, config)
-    except UnknownModelError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        enriched_request = enrich_request(request, enrichment_config)
+
+        try:
+            provider_name, adapter = resolve_provider_for_model(enriched_request.model, config)
+        except UnknownModelError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return enriched_request, provider_name, adapter
 
@@ -72,9 +77,14 @@ async def create_chat_completion(
     # provider selection) below -- ADR-020's X-Priority header, defaulting to
     # "realtime", picks the tier; ADR-011's per-tier ceiling is enforced via
     # gateway/ratelimit/limiter.py against the buckets Redis already owns.
+    tracer = tracing.get_tracer()
+
     tier = resolve_tier(x_priority, get_config())
     estimated_tokens = estimate_tokens(request)
-    decision = await check_rate_limit(team, tier, estimated_tokens)
+    with tracer.start_as_current_span("rate_limit_check") as span:
+        span.set_attribute("team_id", team.id)
+        span.set_attribute("model_requested", request.model)
+        decision = await check_rate_limit(team, tier, estimated_tokens)
     if not decision.allowed:
         raise HTTPException(
             status_code=429,
@@ -92,14 +102,22 @@ async def create_chat_completion(
     enriched_request, provider_name, adapter = await _prepare_request(request, team)
 
     async def _record_spend(completed: ChatCompletionResponse, provider: str) -> None:
-        cost = compute_cost(completed.usage, provider, completed.model, get_config().pricing)
-        await record_spend(team, provider, completed.model, completed.usage, cost, completed.id)
+        with tracer.start_as_current_span("response_processing") as span:
+            cost = compute_cost(completed.usage, provider, completed.model, get_config().pricing)
+            span.set_attribute("input_tokens", completed.usage.prompt_tokens)
+            span.set_attribute("output_tokens", completed.usage.completion_tokens)
+            span.set_attribute("cost_usd", float(cost))
+            await record_spend(team, provider, completed.model, completed.usage, cost, completed.id)
 
     if enriched_request.stream:
         try:
-            serving_provider, _serving_model, chunks, first_chunk = await resolve_streaming_start(
-                provider_name, enriched_request.model, enriched_request, get_config(), get_redis()
-            )
+            with tracer.start_as_current_span("provider_call") as span:
+                span.set_attribute("team_id", team.id)
+                span.set_attribute("model_requested", request.model)
+                serving_provider, serving_model, chunks, first_chunk = await resolve_streaming_start(
+                    provider_name, enriched_request.model, enriched_request, get_config(), get_redis()
+                )
+                span.set_attribute("model_served", serving_model)
         except RetryableProviderError as exc:
             # Same reasoning as the non-streaming branch below -- every
             # candidate was exhausted or skipped before producing any output,
@@ -114,16 +132,30 @@ async def create_chat_completion(
             await reconcile_tpm(team, tier, estimated_tokens, completed.usage.total_tokens)
             await _record_spend(completed, serving_provider)
 
+        async def _traced_stream():
+            # response_delivery spans the whole SSE send (ADR-009: this is
+            # where response bytes actually go over the wire), not just a
+            # short bookkeeping step like the non-streaming branch below.
+            with tracer.start_as_current_span("response_delivery"):
+                async for chunk in stream_chat_completion(
+                    chunks, first_chunk, enriched_request, on_complete=_on_complete
+                ):
+                    yield chunk
+
         return StreamingResponse(
-            stream_chat_completion(chunks, first_chunk, enriched_request, on_complete=_on_complete),
+            _traced_stream(),
             media_type="text/event-stream",
             headers={"X-Budget-Warning": "true"} if budget_status.warning else None,
         )
 
     try:
-        serving_provider, completion = await call_with_resilience(
-            enriched_request, provider_name, enriched_request.model, adapter, get_config(), get_redis()
-        )
+        with tracer.start_as_current_span("provider_call") as span:
+            span.set_attribute("team_id", team.id)
+            span.set_attribute("model_requested", request.model)
+            serving_provider, completion = await call_with_resilience(
+                enriched_request, provider_name, enriched_request.model, adapter, get_config(), get_redis()
+            )
+            span.set_attribute("model_served", completion.model)
     except RetryableProviderError as exc:
         # Every candidate in the primary+fallback chain was exhausted or
         # skipped (breaker open) -- surface as 503 so callers know it's worth
@@ -139,7 +171,8 @@ async def create_chat_completion(
     await _record_spend(completion, serving_provider)
     if budget_status.warning:
         response.headers["X-Budget-Warning"] = "true"
-    return completion
+    with tracer.start_as_current_span("response_delivery"):
+        return completion
 
 
 @router.get("/v1/models")

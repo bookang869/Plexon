@@ -39,6 +39,15 @@ services:
     ports:
       - "8082:8080"
 
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "4317:4317"
+      - "3200:3200"
+
   gateway:
     build:
       context: ..
@@ -49,6 +58,8 @@ services:
       PLEXON_DATABASE_URL: "postgresql://plexon:plexon@postgres:5432/plexon"
       PLEXON_CONFIG_PATH: "/app/config.yaml"
       PLEXON_REDIS_URL: "redis://redis:6379/0"
+      PLEXON_OTEL_EXPORTER_ENDPOINT: "tempo:4317"
     depends_on:
       - postgres
       - redis
+      - tempo

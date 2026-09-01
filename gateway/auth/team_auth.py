@@ -13,6 +13,7 @@ from fastapi import Header, HTTPException
 from pydantic import BaseModel
 
 from gateway.db import get_pool
+from gateway.observability import tracing
 
 _INVALID_KEY_DETAIL = "invalid or missing API key"
 
@@ -46,25 +47,28 @@ def _extract_token(authorization: str | None) -> str | None:
 
 
 async def get_current_team(authorization: str | None = Header(default=None)) -> Team:
-    token = _extract_token(authorization)
-    if not token:
-        raise HTTPException(status_code=401, detail=_INVALID_KEY_DETAIL)
+    with tracing.get_tracer().start_as_current_span("auth") as span:
+        token = _extract_token(authorization)
+        if not token:
+            raise HTTPException(status_code=401, detail=_INVALID_KEY_DETAIL)
 
-    row = await get_pool().fetchrow(_TEAM_LOOKUP_QUERY, token)
-    if row is None:
-        raise HTTPException(status_code=401, detail=_INVALID_KEY_DETAIL)
+        row = await get_pool().fetchrow(_TEAM_LOOKUP_QUERY, token)
+        if row is None:
+            raise HTTPException(status_code=401, detail=_INVALID_KEY_DETAIL)
 
-    config = row["config"]
-    if isinstance(config, str):
-        config = json.loads(config)
+        config = row["config"]
+        if isinstance(config, str):
+            config = json.loads(config)
 
-    return Team(
-        id=row["id"],
-        name=row["name"],
-        allowed_models=list(row["allowed_models"]),
-        rpm_limit=row["rpm_limit"],
-        tpm_limit=row["tpm_limit"],
-        daily_budget_usd=row["daily_budget_usd"],
-        monthly_budget_usd=row["monthly_budget_usd"],
-        config=config,
-    )
+        team = Team(
+            id=row["id"],
+            name=row["name"],
+            allowed_models=list(row["allowed_models"]),
+            rpm_limit=row["rpm_limit"],
+            tpm_limit=row["tpm_limit"],
+            daily_budget_usd=row["daily_budget_usd"],
+            monthly_budget_usd=row["monthly_budget_usd"],
+            config=config,
+        )
+        span.set_attribute("team_id", team.id)
+        return team
