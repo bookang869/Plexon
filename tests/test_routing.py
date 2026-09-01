@@ -16,6 +16,9 @@ import pytest_asyncio
 
 from gateway.config.loader import start_config_watcher
 from gateway.main import app
+from gateway.routes import (
+    router,  # noqa: F401 -- exercised via `app`, imported for module-coverage linkage
+)
 
 _config_loaded = False
 
@@ -155,3 +158,39 @@ async def test_list_models_returns_teams_allowed_models(client, seeded_team):
 async def test_list_models_requires_auth(client):
     resp = await client.get("/v1/models")
     assert resp.status_code == 401
+
+
+# --- resilience wiring (fallback on primary failure) --------------------------
+
+
+@pytest.mark.asyncio
+async def test_primary_failure_falls_back_to_next_provider_in_chain(client, seeded_team):
+    """fast_tier (tests/fixtures/test_config.yaml): [anthropic:claude-sonnet,
+    openai:gpt-4o-mini, ollama:llama3] -- seeded_team is allowed both models.
+    Pre-populates the provider-registry adapter cache with a stub that always
+    raises RetryableProviderError for "anthropic", so the real orchestration
+    path (call_with_resilience) exhausts the primary's retries and falls back
+    to the real mock-openai container, without ever touching the network for
+    the primary. Same stub-adapter technique as test_streaming.py's
+    _FaultInjectingAdapter -- X-Mock-Fault isn't forwarded by real adapters
+    (openai_adapter.py's chat_completion doesn't wire it through), so it's a
+    dead end for route-level fault testing.
+    """
+    from gateway.providers import registry as provider_registry
+    from gateway.providers.errors import RetryableProviderError
+
+    class _AlwaysFailsAdapter:
+        async def chat_completion(self, request):
+            raise RetryableProviderError("stub: primary always fails")
+
+    provider_registry._adapters["anthropic"] = _AlwaysFailsAdapter()
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]},
+        headers=_auth_headers(seeded_team["api_key"]),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["object"] == "chat.completion"
+    assert body["model"] == "gpt-4o-mini"
