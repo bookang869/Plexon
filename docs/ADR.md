@@ -282,6 +282,16 @@ PRD Phase 6 (demo recording + narrative) is done manually and is not encoded as 
 
 ---
 
+### ADR-027: Alert Evaluation — Gateway-Owned Periodic Redis Evaluator, Not Grafana Alerting Rules
+
+**Context:** ADR-014 decided the alert *sink* (Slack webhook, env-gated, console fallback) but not how the two window-based triggers (provider error rate, latency P99) get *evaluated*. Unlike circuit-breaker-opens or budget-crosses-80%, neither has a single triggering event already in the code to hang a call off of. CLAUDE.md requires new resilience/rate-limit logic to be covered by the pytest integration suite; alert rules expressed only as Grafana Alerting provisioning YAML would live entirely outside this repo's test suite.
+
+**Decision:** Evaluate the two window-based alert conditions with a gateway-owned periodic asyncio loop (`gateway/observability/alert_evaluator.py`, mirroring `gateway/resilience/health_check.py`'s loop shape), reading a Redis-backed rolling window of real request outcomes recorded by `gateway/routes.py` — not Grafana Alerting rules against Prometheus. All four alert triggers (circuit breaker open, budget crossing 80%, provider error rate, latency P99) track their own "already alerted for this crossing" dedup state, so each fires once per crossing rather than once per request/tick while the condition merely holds.
+
+**Consequences:** Alert-evaluation logic is exercised by `tests/test_alert_evaluator.py` like any other gateway code, satisfying CLAUDE.md's coverage requirement — a Grafana-only implementation couldn't be. Adds a second Redis-backed rolling window structurally similar to, but explicitly decoupled from (ADR-025), `health_check.py`'s ping-based one; the two now duplicate a similar "window + threshold" shape for different purposes (health status vs. alerting).
+
+---
+
 ## Implementation Notes (Not Formal Decisions)
 
 Lower-stakes choices settled as working assumptions rather than dedicated ADRs:

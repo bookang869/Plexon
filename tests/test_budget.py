@@ -59,6 +59,7 @@ async def _insert_team(db_pool, *, daily_budget_usd, monthly_budget_usd) -> dict
 
 async def _delete_team(db_pool, team_id: str) -> None:
     await db_pool.execute("DELETE FROM spend_ledger WHERE team_id = $1", team_id)
+    await db_pool.execute("DELETE FROM alert_history WHERE team_id = $1", team_id)
     await db_pool.execute("DELETE FROM team_api_keys WHERE team_id = $1", team_id)
     await db_pool.execute("DELETE FROM teams WHERE id = $1", team_id)
 

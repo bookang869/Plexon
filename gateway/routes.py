@@ -17,6 +17,7 @@ from gateway.enrichment.config import resolve_enrichment_config
 from gateway.enrichment.content_filter import check_content_filter
 from gateway.enrichment.enrich import enrich_request
 from gateway.observability import tracing
+from gateway.observability.alert_evaluator import record_request_outcome
 from gateway.observability.metrics import (
     gateway_cost_usd_total,
     gateway_errors_total,
@@ -27,7 +28,12 @@ from gateway.observability.metrics import (
 from gateway.providers.base import ProviderAdapter
 from gateway.providers.errors import NonRetryableProviderError, RetryableProviderError
 from gateway.providers.registry import UnknownModelError, resolve_provider_for_model
-from gateway.ratelimit.budget import check_budget, compute_cost, record_spend
+from gateway.ratelimit.budget import (
+    alert_on_budget_warning,
+    check_budget,
+    compute_cost,
+    record_spend,
+)
 from gateway.ratelimit.limiter import check_rate_limit, estimate_tokens, reconcile_tpm, resolve_tier
 from gateway.redis_client import get_redis
 from gateway.resilience.orchestrator import call_with_resilience, resolve_streaming_start
@@ -104,6 +110,7 @@ async def create_chat_completion(
     # rate-limiting's 429, so callers/tests can tell "out of budget" apart
     # from "sending too fast".
     budget_status = await check_budget(team)
+    await alert_on_budget_warning(team, budget_status)
     if budget_status.blocked:
         raise HTTPException(status_code=402, detail="budget exceeded")
 
@@ -134,17 +141,17 @@ async def create_chat_completion(
                     provider_name, enriched_request.model, enriched_request, get_config(), get_redis()
                 )
                 span.set_attribute("model_served", serving_model)
-            gateway_latency_seconds.labels(provider=serving_provider).observe(
-                time.monotonic() - call_started
-            )
+            elapsed = time.monotonic() - call_started
+            gateway_latency_seconds.labels(provider=serving_provider).observe(elapsed)
+            await record_request_outcome(get_redis(), serving_provider, success=True, latency_ms=elapsed * 1000)
         except RetryableProviderError as exc:
             # Same reasoning as the non-streaming branch below -- every
             # candidate was exhausted or skipped before producing any output,
             # so nothing has been sent to the client yet and a real status
             # code can still be returned instead of a fake 200.
-            gateway_latency_seconds.labels(provider=provider_name).observe(
-                time.monotonic() - call_started
-            )
+            elapsed = time.monotonic() - call_started
+            gateway_latency_seconds.labels(provider=provider_name).observe(elapsed)
+            await record_request_outcome(get_redis(), provider_name, success=False, latency_ms=elapsed * 1000)
             gateway_requests_total.labels(team=team.id, model=request.model, provider=provider_name).inc()
             gateway_errors_total.labels(
                 team=team.id, model=request.model, provider=provider_name, error_type="retryable"
@@ -152,9 +159,9 @@ async def create_chat_completion(
             headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
             raise HTTPException(status_code=503, detail=str(exc), headers=headers) from exc
         except NonRetryableProviderError as exc:
-            gateway_latency_seconds.labels(provider=provider_name).observe(
-                time.monotonic() - call_started
-            )
+            elapsed = time.monotonic() - call_started
+            gateway_latency_seconds.labels(provider=provider_name).observe(elapsed)
+            await record_request_outcome(get_redis(), provider_name, success=False, latency_ms=elapsed * 1000)
             gateway_requests_total.labels(team=team.id, model=request.model, provider=provider_name).inc()
             gateway_errors_total.labels(
                 team=team.id, model=request.model, provider=provider_name, error_type="non_retryable"
@@ -190,12 +197,16 @@ async def create_chat_completion(
                 enriched_request, provider_name, enriched_request.model, adapter, get_config(), get_redis()
             )
             span.set_attribute("model_served", completion.model)
-        gateway_latency_seconds.labels(provider=serving_provider).observe(time.monotonic() - call_started)
+        elapsed = time.monotonic() - call_started
+        gateway_latency_seconds.labels(provider=serving_provider).observe(elapsed)
+        await record_request_outcome(get_redis(), serving_provider, success=True, latency_ms=elapsed * 1000)
     except RetryableProviderError as exc:
         # Every candidate in the primary+fallback chain was exhausted or
         # skipped (breaker open) -- surface as 503 so callers know it's worth
         # retrying.
-        gateway_latency_seconds.labels(provider=provider_name).observe(time.monotonic() - call_started)
+        elapsed = time.monotonic() - call_started
+        gateway_latency_seconds.labels(provider=provider_name).observe(elapsed)
+        await record_request_outcome(get_redis(), provider_name, success=False, latency_ms=elapsed * 1000)
         gateway_requests_total.labels(team=team.id, model=request.model, provider=provider_name).inc()
         gateway_errors_total.labels(
             team=team.id, model=request.model, provider=provider_name, error_type="retryable"
@@ -205,7 +216,9 @@ async def create_chat_completion(
     except NonRetryableProviderError as exc:
         # Upstream rejected our forwarded request outright (auth failure,
         # content policy) -- not something a retry would fix.
-        gateway_latency_seconds.labels(provider=provider_name).observe(time.monotonic() - call_started)
+        elapsed = time.monotonic() - call_started
+        gateway_latency_seconds.labels(provider=provider_name).observe(elapsed)
+        await record_request_outcome(get_redis(), provider_name, success=False, latency_ms=elapsed * 1000)
         gateway_requests_total.labels(team=team.id, model=request.model, provider=provider_name).inc()
         gateway_errors_total.labels(
             team=team.id, model=request.model, provider=provider_name, error_type="non_retryable"

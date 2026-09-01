@@ -20,6 +20,7 @@ from redis.asyncio import Redis
 
 from gateway.config.loader import CircuitBreakerConfig
 from gateway.db import get_pool
+from gateway.observability.alerts import send_alert
 from gateway.observability.metrics import (
     gateway_circuit_breaker_state,
     gateway_circuit_breaker_transitions_total,
@@ -208,6 +209,16 @@ async def _record_transition(
             provider,
             from_state.value,
             to_state.value,
+        )
+
+    if to_state == BreakerState.OPEN:
+        # _record_transition only runs once per real transition (not once per
+        # request), so no extra dedup state is needed here -- the state
+        # machine itself already gates this to an actual open.
+        await send_alert(
+            "circuit_breaker_open",
+            f"circuit breaker opened for provider={provider} (reason={reason})",
+            {"provider": provider, "from_state": from_state.value, "to_state": to_state.value, "reason": reason},
         )
 
 

@@ -72,3 +72,15 @@ CREATE TABLE provider_health_history (
   p99_latency_ms int,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
+
+-- Alert history -- every alert fired via send_alert(), Slack-delivered or
+-- console-fallback, regardless of sink (ADR-014, ADR-027)
+CREATE TABLE alert_history (
+  id          bigserial PRIMARY KEY,
+  alert_type  text NOT NULL,
+  provider    text,
+  team_id     text REFERENCES teams(id),
+  message     text NOT NULL,
+  context     jsonb,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
