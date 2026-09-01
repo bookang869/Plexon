@@ -32,7 +32,7 @@
       "status": "completed",
       "started_at": "2026-09-01T11:51:26+0900",
       "summary": "Added gateway/resilience/health_check.py -- `HealthState(str, Enum)` (HEALTHY/DEGRADED/DOWN), `check_provider_health(redis, pool, provider, adapter, config) -> HealthState` (one ping via adapter.health_check(), rolling last-5 window in Redis list `health:{provider}:recent`, status computed most-recent-fails->DOWN / partial-window-or-over-2000ms-latency-or-any-earlier-failure->DEGRADED / else HEALTHY, published to `health:{provider}:{model}:status` for every model the provider serves with TTL=interval*3 so a stalled loop goes stale rather than lying healthy, one best-effort `provider_health_history` row per tick with model=NULL), plus `run_health_check_loop`/`start_health_check_loop` mirroring config/loader.py's `_watch_loop`/`start_config_watcher` shape, per-provider try/except so one provider's exception never stops others or kills the loop; wired into gateway/main.py's lifespan after start_config_watcher(). Zero import relationship with circuit_breaker.py in either direction (enforced by a static-import-check test) -- this loop only feeds the Operations dashboard/history, per ADR-025 it is never wired into breaker state. New tests/test_health_check.py (9 tests: all 5 status-computation rules, per-model publishing, history-row correctness, Postgres-failure-doesn't-corrupt-Redis, import-decoupling check). Full suite (195 tests) passes; ruff clean. Resilience phase complete.",
-      "completed_at": "2026-09-01T12:05:00+0900"
+      "completed_at": "2026-09-01T11:54:46+0900"
     }
   ],
   "created_at": "2026-09-01T08:35:21+0900"
