@@ -20,6 +20,8 @@ from gateway.providers.errors import NonRetryableProviderError, RetryableProvide
 from gateway.providers.registry import UnknownModelError, resolve_provider_for_model
 from gateway.ratelimit.budget import check_budget, compute_cost, record_spend
 from gateway.ratelimit.limiter import check_rate_limit, estimate_tokens, reconcile_tpm, resolve_tier
+from gateway.redis_client import get_redis
+from gateway.resilience.orchestrator import call_with_resilience, resolve_streaming_start
 from gateway.schemas import ChatCompletionRequest, ChatCompletionResponse
 from gateway.streaming import stream_chat_completion
 
@@ -89,27 +91,43 @@ async def create_chat_completion(
 
     enriched_request, provider_name, adapter = await _prepare_request(request, team)
 
-    async def _record_spend(completed: ChatCompletionResponse) -> None:
-        cost = compute_cost(completed.usage, provider_name, completed.model, get_config().pricing)
-        await record_spend(team, provider_name, completed.model, completed.usage, cost, completed.id)
+    async def _record_spend(completed: ChatCompletionResponse, provider: str) -> None:
+        cost = compute_cost(completed.usage, provider, completed.model, get_config().pricing)
+        await record_spend(team, provider, completed.model, completed.usage, cost, completed.id)
 
     if enriched_request.stream:
+        try:
+            serving_provider, _serving_model, chunks, first_chunk = await resolve_streaming_start(
+                provider_name, enriched_request.model, enriched_request, get_config(), get_redis()
+            )
+        except RetryableProviderError as exc:
+            # Same reasoning as the non-streaming branch below -- every
+            # candidate was exhausted or skipped before producing any output,
+            # so nothing has been sent to the client yet and a real status
+            # code can still be returned instead of a fake 200.
+            headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+            raise HTTPException(status_code=503, detail=str(exc), headers=headers) from exc
+        except NonRetryableProviderError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
         async def _on_complete(completed: ChatCompletionResponse) -> None:
             await reconcile_tpm(team, tier, estimated_tokens, completed.usage.total_tokens)
-            await _record_spend(completed)
+            await _record_spend(completed, serving_provider)
 
         return StreamingResponse(
-            stream_chat_completion(adapter, enriched_request, on_complete=_on_complete),
+            stream_chat_completion(chunks, first_chunk, enriched_request, on_complete=_on_complete),
             media_type="text/event-stream",
             headers={"X-Budget-Warning": "true"} if budget_status.warning else None,
         )
 
     try:
-        completion = await adapter.chat_completion(enriched_request)
+        serving_provider, completion = await call_with_resilience(
+            enriched_request, provider_name, enriched_request.model, adapter, get_config(), get_redis()
+        )
     except RetryableProviderError as exc:
-        # Transient upstream failure (timeout, 429, 5xx) -- the resilience
-        # phase will retry/fall back before this mapping is ever reached;
-        # for now surface it as 503 so callers know it's worth retrying.
+        # Every candidate in the primary+fallback chain was exhausted or
+        # skipped (breaker open) -- surface as 503 so callers know it's worth
+        # retrying.
         headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
         raise HTTPException(status_code=503, detail=str(exc), headers=headers) from exc
     except NonRetryableProviderError as exc:
@@ -118,7 +136,7 @@ async def create_chat_completion(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     await reconcile_tpm(team, tier, estimated_tokens, completion.usage.total_tokens)
-    await _record_spend(completion)
+    await _record_spend(completion, serving_provider)
     if budget_status.warning:
         response.headers["X-Budget-Warning"] = "true"
     return completion

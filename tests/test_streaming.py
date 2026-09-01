@@ -126,6 +126,97 @@ async def test_non_streaming_route_still_works(client, seeded_team):
     assert body["choices"][0]["message"]["content"]
 
 
+# --- route-level: pre-first-chunk resilience (fallback/exhaustion) ----------
+
+
+class _StreamAlwaysFailsAdapter:
+    """Stubbed adapter whose stream never starts -- simulates a provider that
+    can't even open a connection, exercising `resolve_streaming_start`'s
+    retry/fallback path at the route level (same stub-adapter-in-registry
+    technique as test_routing.py's `_AlwaysFailsAdapter`, cleaned up
+    automatically by conftest.py's autouse `_reset_provider_registry_cache`).
+    """
+
+    async def chat_completion_stream(self, request):
+        raise RetryableProviderError("stub: stream never starts")
+        yield  # pragma: no cover -- unreachable, only makes this an async generator
+
+
+@pytest.mark.asyncio
+async def test_streaming_primary_stream_open_failure_falls_back_to_next_provider(client, seeded_team):
+    from gateway.providers import registry as provider_registry
+
+    provider_registry._adapters["anthropic"] = _StreamAlwaysFailsAdapter()
+
+    async with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "claude-sonnet",
+            "messages": [{"role": "user", "content": "stream please"}],
+            "stream": True,
+        },
+        headers=_auth_headers(seeded_team["api_key"]),
+    ) as resp:
+        assert resp.status_code == 200
+        chunks, _ = await _read_sse(resp)
+
+    assert chunks
+    assert all(chunk["model"] == "gpt-4o-mini" for chunk in chunks)
+    assert _assemble_content(chunks)
+
+
+@pytest.mark.asyncio
+async def test_streaming_all_candidates_fail_before_first_chunk_returns_503(client, seeded_team):
+    from gateway.providers import registry as provider_registry
+
+    for provider in ("anthropic", "openai", "ollama"):
+        provider_registry._adapters[provider] = _StreamAlwaysFailsAdapter()
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "claude-sonnet",
+            "messages": [{"role": "user", "content": "stream please"}],
+            "stream": True,
+        },
+        headers=_auth_headers(seeded_team["api_key"]),
+    )
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_streaming_served_by_fallback_records_spend_against_fallback_provider(
+    client, db_pool, seeded_team
+):
+    from gateway.providers import registry as provider_registry
+
+    provider_registry._adapters["anthropic"] = _StreamAlwaysFailsAdapter()
+
+    async with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "claude-sonnet",
+            "messages": [{"role": "user", "content": "stream please"}],
+            "stream": True,
+        },
+        headers=_auth_headers(seeded_team["api_key"]),
+    ) as resp:
+        assert resp.status_code == 200
+        chunks, _ = await _read_sse(resp)
+
+    assert _assemble_content(chunks)
+
+    row = await db_pool.fetchrow(
+        "SELECT * FROM spend_ledger WHERE team_id = $1 ORDER BY id DESC LIMIT 1",
+        seeded_team["team_id"],
+    )
+    assert row is not None
+    assert row["provider"] == "openai"
+    assert row["model"] == "gpt-4o-mini"
+
+
 # --- direct stream_chat_completion(): tee/assembly matches non-streaming ---
 
 
@@ -140,7 +231,9 @@ async def test_assembled_response_matches_non_streaming_openai_call():
 
     assembled: list[ChatCompletionResponse] = []
     stream_request = ChatCompletionRequest(model="gpt-4o-mini", messages=prompt, stream=True)
-    async for _ in stream_chat_completion(adapter, stream_request, on_complete=assembled.append):
+    it = adapter.chat_completion_stream(stream_request)
+    first = await it.__anext__()
+    async for _ in stream_chat_completion(it, first, stream_request, on_complete=assembled.append):
         pass
 
     assert len(assembled) == 1
@@ -159,7 +252,9 @@ async def test_assembled_response_matches_non_streaming_anthropic_call():
 
     assembled: list[ChatCompletionResponse] = []
     stream_request = ChatCompletionRequest(model="claude-sonnet", messages=prompt, stream=True)
-    async for _ in stream_chat_completion(adapter, stream_request, on_complete=assembled.append):
+    it = adapter.chat_completion_stream(stream_request)
+    first = await it.__anext__()
+    async for _ in stream_chat_completion(it, first, stream_request, on_complete=assembled.append):
         pass
 
     assert len(assembled) == 1
@@ -198,11 +293,11 @@ async def test_mid_stream_fault_emits_error_chunk_and_done_without_raising():
     )
     on_complete_calls: list[ChatCompletionResponse] = []
 
+    it = _FaultInjectingAdapter().chat_completion_stream(request)
+    first = await it.__anext__()
     raw_chunks = [
         chunk
-        async for chunk in stream_chat_completion(
-            _FaultInjectingAdapter(), request, on_complete=on_complete_calls.append
-        )
+        async for chunk in stream_chat_completion(it, first, request, on_complete=on_complete_calls.append)
     ]
 
     text = b"".join(raw_chunks).decode()

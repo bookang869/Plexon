@@ -46,3 +46,13 @@ def resolve_provider_for_model(model: str, config: GatewayConfig) -> tuple[str, 
         if model in provider_config.models:
             return name, _get_adapter(name, provider_config.base_url)
     raise UnknownModelError(model)
+
+
+def get_adapter_for_provider(provider: str, config: GatewayConfig) -> ProviderAdapter:
+    """Like resolve_provider_for_model, but for when the caller already knows
+    which provider it wants (fallback candidates come from
+    resolve_fallback_chain already split into provider+model). Reuses the
+    same _get_adapter cache.
+    """
+    provider_config = getattr(config.providers, provider)
+    return _get_adapter(provider, provider_config.base_url)

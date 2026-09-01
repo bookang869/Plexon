@@ -12,6 +12,7 @@ dependencies = [
     "asyncpg",
     "redis",
     "httpx",
+    "tenacity",
 ]
 
 [dependency-groups]

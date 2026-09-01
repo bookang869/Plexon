@@ -5,6 +5,13 @@ to SSE bytes *as they arrive* and, simultaneously, accumulate them into a
 complete `ChatCompletionResponse` for whatever later phase wants to log/
 observe it (spend ledger, OTel spans -- not this step, see gateway/routes.py).
 
+Stream *establishment* (calling `adapter.chat_completion_stream` and pulling
+the first chunk) is the caller's job as of the resilience phase's step 2 --
+retry/fallback across providers happens before this function is ever
+invoked (see `gateway/resilience/orchestrator.py`'s `resolve_streaming_start`).
+By the time `stream_chat_completion` runs, a candidate has already produced
+at least one chunk successfully.
+
 Usage limitation: no adapter's `chat_completion_stream` carries token usage
 today -- `ChatCompletionChunk` (step 1) has no `usage` field, mock-openai's
 SSE never emits one, and AnthropicAdapter's stream translation drops the
@@ -23,10 +30,10 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 
-from gateway.providers.base import ProviderAdapter
 from gateway.providers.errors import ProviderError
 from gateway.schemas import (
     ChatCompletionChoice,
+    ChatCompletionChunk,
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatMessage,
@@ -46,24 +53,29 @@ def _estimate_usage(request: ChatCompletionRequest, completion_text: str) -> Usa
 
 
 async def stream_chat_completion(
-    adapter: ProviderAdapter,
+    chunks: AsyncIterator[ChatCompletionChunk],
+    first_chunk: ChatCompletionChunk,
     request: ChatCompletionRequest,
     on_complete: Callable[[ChatCompletionResponse], Awaitable[None] | None] | None = None,
 ) -> AsyncIterator[bytes]:
     """Yields SSE-formatted bytes (`data: {...}\\n\\n`), ending with
-    `data: [DONE]\\n\\n`. Tees every chunk into an assembled-response buffer
-    as it's yielded; once the stream ends successfully, calls `on_complete`
-    (if given) with the assembled `ChatCompletionResponse`. `on_complete` may
-    be sync or async -- an awaitable return value is awaited, a bare `None`
-    is not.
+    `data: [DONE]\\n\\n`. `chunks` is an already-in-flight async iterator
+    (from some adapter's `chat_completion_stream`) whose first item has
+    already been pulled out as `first_chunk` by the caller (as part of the
+    retry/fallback-eligible stream-establishment window -- see module
+    docstring). Tees every chunk (`first_chunk`, then the rest of `chunks`)
+    into an assembled-response buffer as it's yielded; once the stream ends
+    successfully, calls `on_complete` (if given) with the assembled
+    `ChatCompletionResponse`. `on_complete` may be sync or async -- an
+    awaitable return value is awaited, a bare `None` is not.
 
     Mid-stream faults: by the time the first chunk is yielded, the HTTP
     response has already started (status 200, headers sent) -- there's no
-    clean status code left to return if the adapter then raises. Instead of
+    clean status code left to return if `chunks` then raises. Instead of
     letting the exception propagate into an ASGI server error, this catches
-    `ProviderError` from the adapter's iterator, emits one final chunk
-    carrying an `error` field, then terminates with `[DONE]`. `on_complete`
-    is not called in that case, since no complete response exists.
+    `ProviderError` from `chunks`' iterator, emits one final chunk carrying
+    an `error` field, then terminates with `[DONE]`. `on_complete` is not
+    called in that case, since no complete response exists.
     """
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
@@ -71,15 +83,20 @@ async def stream_chat_completion(
     content_parts: list[str] = []
     finish_reason: str | None = None
 
+    def _consume(chunk: ChatCompletionChunk) -> bytes:
+        nonlocal completion_id, created, model, finish_reason
+        completion_id, created, model = chunk.id, chunk.created, chunk.model
+        for choice in chunk.choices:
+            if choice.delta.content:
+                content_parts.append(choice.delta.content)
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+        return f"data: {chunk.model_dump_json()}\n\n".encode()
+
     try:
-        async for chunk in adapter.chat_completion_stream(request):
-            completion_id, created, model = chunk.id, chunk.created, chunk.model
-            for choice in chunk.choices:
-                if choice.delta.content:
-                    content_parts.append(choice.delta.content)
-                if choice.finish_reason:
-                    finish_reason = choice.finish_reason
-            yield f"data: {chunk.model_dump_json()}\n\n".encode()
+        yield _consume(first_chunk)
+        async for chunk in chunks:
+            yield _consume(chunk)
     except ProviderError as exc:
         error_chunk = {
             "id": completion_id,

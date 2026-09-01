@@ -8,7 +8,7 @@ Callers talk to Plexon exactly like they'd talk to OpenAI's Chat Completions API
 
 ## Status
 
-Phase 0 (`proxy-layer`) is merged; phase 1 (`ratelimit-budget`) is complete and in this PR — the gateway proxies, authenticates, rate-limits, and enforces budget today. Resilience, observability, and the load-tested full stack are still ahead — see [Build Plan](#build-plan) below for progress.
+Phases 0 (`proxy-layer`) and 1 (`ratelimit-budget`) are merged; phase 2 (`resilience`) is complete and in this PR — the gateway proxies, authenticates, rate-limits, enforces budget, and now retries/falls back around provider failures behind a per-provider circuit breaker today. Observability and the load-tested full stack are still ahead — see [Build Plan](#build-plan) below for progress.
 
 ## Why This Project
 
@@ -34,27 +34,30 @@ flowchart TB
     subgraph GW["Gateway — FastAPI"]
         direction LR
         AUTH["Auth\nteam API key"]
-        RATE["Rate Limit ★\ntiered token bucket"]
-        BUDGET["Budget Check ★\ndaily / monthly spend"]
+        RATE["Rate Limit\ntiered token bucket"]
+        BUDGET["Budget Check\ndaily / monthly spend"]
         ENR["Enrichment\nprompts + content filter"]
         SEL["Provider Select\nmodel → provider"]
+        RESIL["Retry + Fallback ★\nbreaker check → primary (3x)\n→ fallback chain (1x each)"]
         RESP["Response\nnon-stream / SSE"]
-        LEDGER["Reconcile + Spend ★\nrefund + ledger write"]
-        AUTH --> RATE --> BUDGET --> ENR --> SEL --> RESP --> LEDGER
+        LEDGER["Reconcile + Spend\nrefund + ledger write\n(against serving provider)"]
+        AUTH --> RATE --> BUDGET --> ENR --> SEL --> RESIL --> RESP --> LEDGER
     end
 
-    subgraph ADM["Admin API ★"]
+    subgraph ADM["Admin API"]
         direction LR
         AAUTH["Admin Auth\nadmin token"]
         AROUTES["limits · spend ·\nteams · audit-log"]
         AAUTH --> AROUTES
     end
 
-    REDIS[("Redis\ntoken buckets + spend counters")]
-    PG[("PostgreSQL\nteam config, spend ledger, audit log")]
-    YAML["YAML Config\nprovider/model map + pricing"]
+    HC["Health Check Loop ★\n30s ping/provider — dashboard only,\nnever gates routing"]
+
+    REDIS[("Redis\ntoken buckets + spend counters +\ncircuit-breaker state ★ + health status ★")]
+    PG[("PostgreSQL\nteam config, spend ledger, audit log,\nbreaker/health history ★")]
+    YAML["YAML Config\nprovider/model map + fallback chains + pricing"]
     PROV["Providers\nOpenAI (mock) · Anthropic (mock) · Ollama (real)"]
-    LATER["Not yet built:\ncircuit breaker + retry/fallback\nhealth checks · observability"]
+    LATER["Not yet built:\nobservability (OTel traces,\nPrometheus metrics, Grafana dashboards)"]
 
     TC --> AUTH
     LEDGER --> TC
@@ -62,20 +65,26 @@ flowchart TB
     AUTH <--> PG
     RATE <--> REDIS
     BUDGET <--> REDIS
+    RESIL <--> REDIS
+    RESIL <--> PG
+    RESIL <--> YAML
+    RESIL --> PROV
     LEDGER <--> REDIS
     LEDGER <--> PG
     AROUTES <--> PG
     SEL <--> YAML
-    SEL --> PROV
+    HC --> PROV
+    HC <--> REDIS
+    HC <--> PG
 
     classDef new fill:#0f948814,stroke:#0f9488,stroke-width:1.5px,color:inherit;
-    class RATE,BUDGET,LEDGER,ADM,AAUTH,AROUTES new;
+    class RESIL,HC new;
     classDef later fill:none,stroke:#999,stroke-dasharray: 4 3,color:#999;
     class LATER later;
 ```
-★ = added this phase (`ratelimit-budget`)
+★ = added this phase (`resilience`)
 
-`auth` reads Postgres for team keys/config; `rate limit` and `budget check` run against Redis before the request is allowed to proceed (429 / 402 respectively), gating `enrichment` and `provider select` exactly like before. After the provider responds, `reconcile + spend` refunds any over-reserved token-bucket capacity and writes the real cost to Redis (fast counter) and Postgres (`spend_ledger`, source of truth). The admin API is a separate authenticated path — a distinct token type from team keys — used to manage limits, inspect spend, provision teams, and read the audit log. Streaming translates each provider's native stream chunks to OpenAI-style SSE in real time, with the same reconcile/ledger step running once the stream completes. Circuit breaking, retry/fallback, health checks, and observability land in later phases and will be added to this diagram as they're built. Full end-state request-flow spec in [`docs/TRD.md`](docs/TRD.md) §3.
+`auth` reads Postgres for team keys/config; `rate limit` and `budget check` run against Redis before the request is allowed to proceed (429 / 402 respectively), gating `enrichment` and `provider select` exactly like before. `provider select` resolves the requested model to a primary provider as before; `retry + fallback` now sits between selection and the actual call — it checks that provider's circuit breaker (Redis-backed, closed/open/half-open), retries the primary up to 3x with backoff on transient errors, and on exhaustion walks the model's fallback chain (`config.yaml`'s `fast_tier`/`frontier_tier`) one attempt per candidate, skipping any provider whose breaker is open. `reconcile + spend` now records cost against whichever provider actually served the response, not necessarily the one originally requested. A fully independent background loop (`health check`) pings each provider every 30s and writes `healthy`/`degraded`/`down` status for the (not-yet-built) Operations dashboard — it never influences routing, since the mocked providers' fault injection is per-request (ADR-025) and a generic health ping wouldn't see it. Every circuit-breaker transition and health-check tick is persisted to Postgres for post-incident history. Observability (OTel traces, Prometheus metrics, Grafana dashboards, Slack alerting) is the next phase and will be added to this diagram once built. Full end-state request-flow spec in [`docs/TRD.md`](docs/TRD.md) §3.
 
 **State is split three ways, by change frequency and durability:**
 
@@ -170,8 +179,8 @@ Implementation is split into 5 [Harness](.claude/commands/harness.md) phases, ea
 | # | Phase | Covers | Status |
 |---|---|---|---|
 | 0 | `proxy-layer` | Project setup, provider abstraction, auth/routing, streaming passthrough, enrichment | ✅ merged |
-| 1 | `ratelimit-budget` | Token buckets, budget caps, tiered limits, admin API | 🔨 this PR |
-| 2 | `resilience` | Health checks, fallback routing, retry/backoff, circuit breakers | ⏳ not started |
+| 1 | `ratelimit-budget` | Token buckets, budget caps, tiered limits, admin API | ✅ merged |
+| 2 | `resilience` | Health checks, fallback routing, retry/backoff, circuit breakers | 🔨 this PR |
 | 3 | `observability` | OTel spans, Prometheus metrics, Grafana dashboards, alerting | ⏳ not started |
 | 4 | `test-load` | Integration test suite, Locust load test, full Docker Compose stack | ⏳ not started |
 
