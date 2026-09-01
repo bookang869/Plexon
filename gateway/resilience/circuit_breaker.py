@@ -20,8 +20,19 @@ from redis.asyncio import Redis
 
 from gateway.config.loader import CircuitBreakerConfig
 from gateway.db import get_pool
+from gateway.observability.metrics import (
+    gateway_circuit_breaker_state,
+    gateway_circuit_breaker_transitions_total,
+)
 
 logger = logging.getLogger(__name__)
+
+# TRD §8: 0=closed, 1=half_open, 2=open.
+_STATE_TO_GAUGE_VALUE = {
+    "closed": 0,
+    "half_open": 1,
+    "open": 2,
+}
 
 # TTL for the half-open probe claim marker -- comfortably longer than a
 # single provider call could plausibly take, so an abandoned probe (the
@@ -181,8 +192,14 @@ async def _record_transition(
     """Best-effort history write (ADR-004: Postgres is durable history, not
     the hot-path system of record) -- mirrors `gateway/ratelimit/budget.py`'s
     `record_spend` pattern. Never raises, never blocks a breaker decision on
-    Postgres being reachable.
+    Postgres being reachable. The Prometheus metrics below run unconditionally
+    -- they must never depend on the best-effort Postgres write succeeding.
     """
+    gateway_circuit_breaker_transitions_total.labels(
+        provider=provider, from_state=from_state.value, to_state=to_state.value
+    ).inc()
+    gateway_circuit_breaker_state.labels(provider=provider).set(_STATE_TO_GAUGE_VALUE[to_state.value])
+
     try:
         await get_pool().execute(_INSERT_HISTORY_ROW, provider, from_state.value, to_state.value, reason)
     except Exception:

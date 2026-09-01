@@ -272,6 +272,16 @@ PRD Phase 6 (demo recording + narrative) is done manually and is not encoded as 
 
 ---
 
+### ADR-026: Metrics Export — `prometheus-client` Direct Scrape, Not an OTel Metrics Exporter
+
+**Context:** The tech-stack table lists Prometheus + Grafana for metrics/dashboards but doesn't say how spans-vs-metrics get from the gateway process to Prometheus. TRD §9's deployment service list is `gateway, redis, postgres, prometheus, grafana, tempo, mock-openai, mock-anthropic, ollama, setup` — no OTel Collector. Piping metrics through OpenTelemetry's metrics SDK would need an OTLP-to-Prometheus path, which in practice means either an OTel Collector (a service not in the spec) or Prometheus's own OTLP receiver (an added, non-default Prometheus feature) — both add moving parts beyond what's already planned.
+
+**Decision:** Instrument metrics directly with `prometheus-client`, exposing them on a `/metrics` endpoint that the existing `prometheus` service scrapes — the standard direct-scrape model the tech-stack table implies, with no new service.
+
+**Consequences:** Metrics and traces now go through two different pipelines (`prometheus-client` direct-scrape vs. OTel SDK → OTLP → Tempo, ADR-013) instead of one unified OTel pipeline. Simpler deployment (no collector) at the cost of that unification; each metric is incremented at its call site in gateway code rather than derived from span data.
+
+---
+
 ## Implementation Notes (Not Formal Decisions)
 
 Lower-stakes choices settled as working assumptions rather than dedicated ADRs:

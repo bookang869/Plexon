@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from prometheus_client import make_asgi_app
 
 from gateway.admin.routes import router as admin_router
 from gateway.config.loader import get_config, start_config_watcher
@@ -38,6 +39,7 @@ async def _root_span_middleware(request: Request, call_next):
 
 app.include_router(router)
 app.include_router(admin_router)
+app.mount("/metrics", make_asgi_app())
 
 
 @app.get("/healthz")

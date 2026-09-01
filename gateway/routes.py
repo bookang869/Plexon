@@ -1,11 +1,12 @@
-"""Gateway request routes -- TRD §3 steps 1, 2, 3, 4, 5, 6, 7, 8, 9 (partial),
-10 (receipt, auth, rate-limit check, budget check, enrichment, provider
-selection, call, response translation, spend-ledger write, delivery). The
-rest of step 9 (OTel spans/Prometheus metrics) is a later phase's work and is
-deliberately absent here.
+"""Gateway request routes -- TRD §3 steps 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+(receipt, auth, rate-limit check, budget check, enrichment, provider
+selection, call, response translation, spend-ledger write + OTel spans/
+Prometheus metrics, delivery).
 """
 
 from __future__ import annotations
+
+import time
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -16,6 +17,13 @@ from gateway.enrichment.config import resolve_enrichment_config
 from gateway.enrichment.content_filter import check_content_filter
 from gateway.enrichment.enrich import enrich_request
 from gateway.observability import tracing
+from gateway.observability.metrics import (
+    gateway_cost_usd_total,
+    gateway_errors_total,
+    gateway_latency_seconds,
+    gateway_requests_total,
+    gateway_tokens_total,
+)
 from gateway.providers.base import ProviderAdapter
 from gateway.providers.errors import NonRetryableProviderError, RetryableProviderError
 from gateway.providers.registry import UnknownModelError, resolve_provider_for_model
@@ -108,8 +116,16 @@ async def create_chat_completion(
             span.set_attribute("output_tokens", completed.usage.completion_tokens)
             span.set_attribute("cost_usd", float(cost))
             await record_spend(team, provider, completed.model, completed.usage, cost, completed.id)
+        # Attributed to the serving provider (which may differ from the
+        # originally-requested one after a fallback), matching record_spend's
+        # convention above.
+        gateway_requests_total.labels(team=team.id, model=completed.model, provider=provider).inc()
+        gateway_tokens_total.labels(team=team.id, direction="input").inc(completed.usage.prompt_tokens)
+        gateway_tokens_total.labels(team=team.id, direction="output").inc(completed.usage.completion_tokens)
+        gateway_cost_usd_total.labels(team=team.id).inc(float(cost))
 
     if enriched_request.stream:
+        call_started = time.monotonic()
         try:
             with tracer.start_as_current_span("provider_call") as span:
                 span.set_attribute("team_id", team.id)
@@ -118,14 +134,31 @@ async def create_chat_completion(
                     provider_name, enriched_request.model, enriched_request, get_config(), get_redis()
                 )
                 span.set_attribute("model_served", serving_model)
+            gateway_latency_seconds.labels(provider=serving_provider).observe(
+                time.monotonic() - call_started
+            )
         except RetryableProviderError as exc:
             # Same reasoning as the non-streaming branch below -- every
             # candidate was exhausted or skipped before producing any output,
             # so nothing has been sent to the client yet and a real status
             # code can still be returned instead of a fake 200.
+            gateway_latency_seconds.labels(provider=provider_name).observe(
+                time.monotonic() - call_started
+            )
+            gateway_requests_total.labels(team=team.id, model=request.model, provider=provider_name).inc()
+            gateway_errors_total.labels(
+                team=team.id, model=request.model, provider=provider_name, error_type="retryable"
+            ).inc()
             headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
             raise HTTPException(status_code=503, detail=str(exc), headers=headers) from exc
         except NonRetryableProviderError as exc:
+            gateway_latency_seconds.labels(provider=provider_name).observe(
+                time.monotonic() - call_started
+            )
+            gateway_requests_total.labels(team=team.id, model=request.model, provider=provider_name).inc()
+            gateway_errors_total.labels(
+                team=team.id, model=request.model, provider=provider_name, error_type="non_retryable"
+            ).inc()
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
         async def _on_complete(completed: ChatCompletionResponse) -> None:
@@ -148,6 +181,7 @@ async def create_chat_completion(
             headers={"X-Budget-Warning": "true"} if budget_status.warning else None,
         )
 
+    call_started = time.monotonic()
     try:
         with tracer.start_as_current_span("provider_call") as span:
             span.set_attribute("team_id", team.id)
@@ -156,15 +190,26 @@ async def create_chat_completion(
                 enriched_request, provider_name, enriched_request.model, adapter, get_config(), get_redis()
             )
             span.set_attribute("model_served", completion.model)
+        gateway_latency_seconds.labels(provider=serving_provider).observe(time.monotonic() - call_started)
     except RetryableProviderError as exc:
         # Every candidate in the primary+fallback chain was exhausted or
         # skipped (breaker open) -- surface as 503 so callers know it's worth
         # retrying.
+        gateway_latency_seconds.labels(provider=provider_name).observe(time.monotonic() - call_started)
+        gateway_requests_total.labels(team=team.id, model=request.model, provider=provider_name).inc()
+        gateway_errors_total.labels(
+            team=team.id, model=request.model, provider=provider_name, error_type="retryable"
+        ).inc()
         headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
         raise HTTPException(status_code=503, detail=str(exc), headers=headers) from exc
     except NonRetryableProviderError as exc:
         # Upstream rejected our forwarded request outright (auth failure,
         # content policy) -- not something a retry would fix.
+        gateway_latency_seconds.labels(provider=provider_name).observe(time.monotonic() - call_started)
+        gateway_requests_total.labels(team=team.id, model=request.model, provider=provider_name).inc()
+        gateway_errors_total.labels(
+            team=team.id, model=request.model, provider=provider_name, error_type="non_retryable"
+        ).inc()
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     await reconcile_tpm(team, tier, estimated_tokens, completion.usage.total_tokens)
