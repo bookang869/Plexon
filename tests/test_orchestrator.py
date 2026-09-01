@@ -30,8 +30,14 @@ from gateway.resilience.circuit_breaker import (
     check_breaker,
     record_failure,
 )
-from gateway.resilience.orchestrator import resolve_with_resilience
-from gateway.schemas import ChatCompletionRequest, ChatMessage
+from gateway.resilience.orchestrator import resolve_streaming_start, resolve_with_resilience
+from gateway.schemas import (
+    ChatCompletionChunk,
+    ChatCompletionChunkChoice,
+    ChatCompletionChunkDelta,
+    ChatCompletionRequest,
+    ChatMessage,
+)
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "test_config.yaml")
 
@@ -340,3 +346,87 @@ async def test_probe_non_retryable_error_calls_neither_record_success_nor_failur
     # reopened by the inconclusive probe outcome.
     decision = await check_breaker(redis_client, "anthropic", config.circuit_breaker)
     assert decision.allowed is False
+
+
+# --- resolve_streaming_start ---------------------------------------------------
+
+
+class _StreamStubAdapter:
+    """Test-only stream adapter -- yields scripted chunks, or raises before
+    yielding anything to simulate a provider whose stream never starts (the
+    only fault shape `resolve_streaming_start` needs to retry/fall back on;
+    mid-stream faults after a first chunk are out of its scope entirely).
+    """
+
+    def __init__(self, outcome):
+        self._outcome = outcome  # Exception, or a list[ChatCompletionChunk]
+
+    async def chat_completion_stream(self, request):
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        for chunk in self._outcome:
+            yield chunk
+
+
+def _stream_chunk(provider: str) -> ChatCompletionChunk:
+    return ChatCompletionChunk(
+        id=f"stub-{provider}",
+        created=0,
+        model="stub-model",
+        choices=[
+            ChatCompletionChunkChoice(
+                index=0, delta=ChatCompletionChunkDelta(role="assistant", content=f"{provider} says hi")
+            )
+        ],
+    )
+
+
+def _stub_stream_adapters(monkeypatch, adapters: dict[str, _StreamStubAdapter]) -> None:
+    def _resolve(provider, config):
+        return adapters[provider]
+
+    monkeypatch.setattr(orchestrator, "get_adapter_for_provider", _resolve)
+
+
+@pytest.mark.asyncio
+async def test_resolve_streaming_start_falls_back_when_primary_stream_fails_to_open(
+    redis_client, monkeypatch
+):
+    config = _config()
+    _stub_stream_adapters(
+        monkeypatch,
+        {
+            "anthropic": _StreamStubAdapter(RetryableProviderError("stream open failed")),
+            "openai": _StreamStubAdapter([_stream_chunk("openai")]),
+        },
+    )
+
+    serving_provider, serving_model, chunks, first_chunk = await resolve_streaming_start(
+        "anthropic", "claude-sonnet", _request(), config, redis_client
+    )
+
+    assert serving_provider == "openai"
+    assert serving_model == "gpt-4o-mini"
+    assert first_chunk.id == "stub-openai"
+    assert [c async for c in chunks] == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_streaming_start_raises_last_error_when_every_candidate_fails_to_open(
+    redis_client, monkeypatch
+):
+    config = _config()
+    last_error = RetryableProviderError("ollama stream open failed")
+    _stub_stream_adapters(
+        monkeypatch,
+        {
+            "anthropic": _StreamStubAdapter(RetryableProviderError("anthropic stream open failed")),
+            "openai": _StreamStubAdapter(RetryableProviderError("openai stream open failed")),
+            "ollama": _StreamStubAdapter(last_error),
+        },
+    )
+
+    with pytest.raises(RetryableProviderError) as excinfo:
+        await resolve_streaming_start("anthropic", "claude-sonnet", _request(), config, redis_client)
+
+    assert excinfo.value is last_error

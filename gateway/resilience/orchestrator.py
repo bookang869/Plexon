@@ -8,7 +8,7 @@ non-streaming-specific typing lives.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TypeVar
 
 from redis.asyncio import Redis
@@ -24,7 +24,7 @@ from gateway.providers.errors import (
 from gateway.providers.registry import get_adapter_for_provider
 from gateway.resilience.circuit_breaker import check_breaker, record_failure, record_success
 from gateway.resilience.fallback import resolve_fallback_chain
-from gateway.schemas import ChatCompletionRequest, ChatCompletionResponse
+from gateway.schemas import ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse
 
 T = TypeVar("T")
 
@@ -141,3 +141,32 @@ async def call_with_resilience(
         provider, model, request, config, redis, _attempt
     )
     return serving_provider, response
+
+
+async def resolve_streaming_start(
+    primary_provider: str,
+    primary_model: str,
+    request: ChatCompletionRequest,
+    config: GatewayConfig,
+    redis: Redis,
+) -> tuple[str, str, AsyncIterator[ChatCompletionChunk], ChatCompletionChunk]:
+    """Streaming counterpart to `call_with_resilience`. Retry/fallback only
+    covers *establishing* the stream -- once a first chunk has been produced,
+    resilience is done and the caller owns the rest of the iteration (ADR-009:
+    no clean status code left once bytes have been sent to the client).
+    Returns (serving_provider, serving_model, chunks, first_chunk) -- `chunks`
+    is the winning candidate's iterator, already advanced past its first
+    item, ready to be handed to `gateway.streaming.stream_chat_completion`.
+    """
+
+    async def _attempt(
+        candidate_provider: str, candidate_adapter: ProviderAdapter, candidate_request: ChatCompletionRequest
+    ) -> tuple[AsyncIterator[ChatCompletionChunk], ChatCompletionChunk]:
+        chunks = candidate_adapter.chat_completion_stream(candidate_request)
+        first_chunk = await chunks.__anext__()
+        return chunks, first_chunk
+
+    serving_provider, serving_model, (chunks, first_chunk) = await resolve_with_resilience(
+        primary_provider, primary_model, request, config, redis, _attempt
+    )
+    return serving_provider, serving_model, chunks, first_chunk
