@@ -8,7 +8,7 @@ Callers talk to Plexon exactly like they'd talk to OpenAI's Chat Completions API
 
 ## Status
 
-Phases 0 (`proxy-layer`) and 1 (`ratelimit-budget`) are merged; phase 2 (`resilience`) is complete and in this PR — the gateway proxies, authenticates, rate-limits, enforces budget, and now retries/falls back around provider failures behind a per-provider circuit breaker today. Observability and the load-tested full stack are still ahead — see [Build Plan](#build-plan) below for progress.
+Phases 0 (`proxy-layer`), 1 (`ratelimit-budget`), and 2 (`resilience`) are merged; phase 3 (`observability`) is complete and in this PR — every request is now traced end-to-end (Grafana Tempo), Prometheus metrics feed three provisioned Grafana dashboards, and Slack gets paged when a circuit breaker opens, a team crosses 80% of budget, or a provider's error rate/P99 latency breaches threshold. The load-tested full stack is still ahead — see [Build Plan](#build-plan) below for progress.
 
 ## Why This Project
 
@@ -38,7 +38,7 @@ flowchart TB
         BUDGET["Budget Check\ndaily / monthly spend"]
         ENR["Enrichment\nprompts + content filter"]
         SEL["Provider Select\nmodel → provider"]
-        RESIL["Retry + Fallback ★\nbreaker check → primary (3x)\n→ fallback chain (1x each)"]
+        RESIL["Retry + Fallback\nbreaker check → primary (3x)\n→ fallback chain (1x each)"]
         RESP["Response\nnon-stream / SSE"]
         LEDGER["Reconcile + Spend\nrefund + ledger write\n(against serving provider)"]
         AUTH --> RATE --> BUDGET --> ENR --> SEL --> RESIL --> RESP --> LEDGER
@@ -51,13 +51,23 @@ flowchart TB
         AAUTH --> AROUTES
     end
 
-    HC["Health Check Loop ★\n30s ping/provider — dashboard only,\nnever gates routing"]
+    HC["Health Check Loop\n30s ping/provider — dashboard only,\nnever gates routing"]
 
-    REDIS[("Redis\ntoken buckets + spend counters +\ncircuit-breaker state ★ + health status ★")]
-    PG[("PostgreSQL\nteam config, spend ledger, audit log,\nbreaker/health history ★")]
-    YAML["YAML Config\nprovider/model map + fallback chains + pricing"]
+    subgraph OBS["Observability ★"]
+        direction LR
+        TRACE["OTel Spans ★\nrequest.receipt → auth →\nrate_limit_check → ... → response_delivery"]
+        METRICS["/metrics ★\nrequests · errors · latency ·\ntokens · cost · fallbacks · breaker state"]
+        ALERT["Alert Evaluator Loop ★\n30s tick — error-rate/P99 breach\n→ Slack (+ breaker-open, budget-80%)"]
+    end
+
+    REDIS[("Redis\ntoken buckets + spend counters +\ncircuit-breaker state + health status +\nalert windows ★")]
+    PG[("PostgreSQL\nteam config, spend ledger, audit log,\nbreaker/health history, alert history ★")]
+    YAML["YAML Config\nprovider/model map + fallback chains +\npricing + alert thresholds ★"]
     PROV["Providers\nOpenAI (mock) · Anthropic (mock) · Ollama (real)"]
-    LATER["Not yet built:\nobservability (OTel traces,\nPrometheus metrics, Grafana dashboards)"]
+    TEMPO[("Grafana Tempo ★\ntrace storage")]
+    PROMSVC[("Prometheus ★\nmetrics scrape")]
+    GRAFANA["Grafana Dashboards ★\nOperations · Business · Performance"]
+    LATER["Not yet built:\nintegration test suite + Locust load test"]
 
     TC --> AUTH
     LEDGER --> TC
@@ -76,23 +86,29 @@ flowchart TB
     HC --> PROV
     HC <--> REDIS
     HC <--> PG
+    GW --> TRACE --> TEMPO
+    GW --> METRICS --> PROMSVC
+    ALERT <--> REDIS
+    ALERT --> OP
+    PROMSVC --> GRAFANA
+    TEMPO --> GRAFANA
 
     classDef new fill:#0f948814,stroke:#0f9488,stroke-width:1.5px,color:inherit;
-    class RESIL,HC new;
+    class OBS,TRACE,METRICS,ALERT,TEMPO,PROMSVC,GRAFANA new;
     classDef later fill:none,stroke:#999,stroke-dasharray: 4 3,color:#999;
     class LATER later;
 ```
-★ = added this phase (`resilience`)
+★ = added this phase (`observability`)
 
-`auth` reads Postgres for team keys/config; `rate limit` and `budget check` run against Redis before the request is allowed to proceed (429 / 402 respectively), gating `enrichment` and `provider select` exactly like before. `provider select` resolves the requested model to a primary provider as before; `retry + fallback` now sits between selection and the actual call — it checks that provider's circuit breaker (Redis-backed, closed/open/half-open), retries the primary up to 3x with backoff on transient errors, and on exhaustion walks the model's fallback chain (`config.yaml`'s `fast_tier`/`frontier_tier`) one attempt per candidate, skipping any provider whose breaker is open. `reconcile + spend` now records cost against whichever provider actually served the response, not necessarily the one originally requested. A fully independent background loop (`health check`) pings each provider every 30s and writes `healthy`/`degraded`/`down` status for the (not-yet-built) Operations dashboard — it never influences routing, since the mocked providers' fault injection is per-request (ADR-025) and a generic health ping wouldn't see it. Every circuit-breaker transition and health-check tick is persisted to Postgres for post-incident history. Observability (OTel traces, Prometheus metrics, Grafana dashboards, Slack alerting) is the next phase and will be added to this diagram once built. Full end-state request-flow spec in [`docs/TRD.md`](docs/TRD.md) §3.
+`auth` reads Postgres for team keys/config; `rate limit` and `budget check` run against Redis before the request is allowed to proceed (429 / 402 respectively), gating `enrichment` and `provider select` exactly like before. `provider select` resolves the requested model to a primary provider; `retry + fallback` checks that provider's circuit breaker, retries the primary up to 3x with backoff on transient errors, and on exhaustion walks the model's fallback chain, skipping any provider whose breaker is open. `reconcile + spend` records cost against whichever provider actually served the response. New this phase: every request opens a root `request.receipt` span with child spans for each pipeline stage, exported to Tempo; every stage also increments Prometheus counters/histograms/gauges scraped off `/metrics`, feeding three provisioned Grafana dashboards. A background alert evaluator loop reads a rolling window of real request outcomes per provider from Redis and pages Slack on an error-rate or P99-latency breach (dedup'd to fire once per crossing, not once per tick); the circuit breaker and budget-check paths page Slack directly on breaker-open and 80%-budget-crossed respectively. Every alert is also persisted to Postgres (`alert_history`) regardless of whether the Slack webhook is configured. Full end-state request-flow spec in [`docs/TRD.md`](docs/TRD.md) §3.
 
 **State is split three ways, by change frequency and durability:**
 
 | Store | Holds | Why |
 |---|---|---|
-| **Redis** (hot-path) | rate-limit token buckets, circuit-breaker state, provider health status, running spend counter | fast-path enforcement only, never the system of record — rebuildable from Postgres |
-| **PostgreSQL** (durable) | team configs, per-request spend ledger, admin audit log, circuit-breaker/health history | source of truth; per-team settings edited live via the admin API, no restart |
-| **YAML** (static, hot-reloaded) | provider endpoints, fallback chains, circuit-breaker thresholds, health-check intervals, per-model pricing | global/rarely-changed settings only, never per-team |
+| **Redis** (hot-path) | rate-limit token buckets, circuit-breaker state, provider health status, running spend counter, per-provider alert-evaluation windows | fast-path enforcement only, never the system of record — rebuildable from Postgres |
+| **PostgreSQL** (durable) | team configs, per-request spend ledger, admin audit log, circuit-breaker/health history, alert history | source of truth; per-team settings edited live via the admin API, no restart |
+| **YAML** (static, hot-reloaded) | provider endpoints, fallback chains, circuit-breaker thresholds, health-check intervals, per-model pricing, alert thresholds | global/rarely-changed settings only, never per-team |
 
 The gateway process itself is stateless — nothing important lives only in memory — so the design supports horizontal scaling without rework, even though the demo runs a single instance.
 
@@ -180,8 +196,8 @@ Implementation is split into 5 [Harness](.claude/commands/harness.md) phases, ea
 |---|---|---|---|
 | 0 | `proxy-layer` | Project setup, provider abstraction, auth/routing, streaming passthrough, enrichment | ✅ merged |
 | 1 | `ratelimit-budget` | Token buckets, budget caps, tiered limits, admin API | ✅ merged |
-| 2 | `resilience` | Health checks, fallback routing, retry/backoff, circuit breakers | 🔨 this PR |
-| 3 | `observability` | OTel spans, Prometheus metrics, Grafana dashboards, alerting | ⏳ not started |
+| 2 | `resilience` | Health checks, fallback routing, retry/backoff, circuit breakers | ✅ merged |
+| 3 | `observability` | OTel spans, Prometheus metrics, Grafana dashboards, alerting | 🔨 this PR |
 | 4 | `test-load` | Integration test suite, Locust load test, full Docker Compose stack | ⏳ not started |
 
 A final polish phase (demo recording + narrative) is done manually, outside Harness.
