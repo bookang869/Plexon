@@ -1,0 +1,72 @@
+{
+  "id": null,
+  "uid": "plexon-business",
+  "title": "Plexon / Business",
+  "tags": ["plexon"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Spend by Team (cumulative total)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "gateway_cost_usd_total",
+          "legendFormat": "{{team}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "title": "Current Spend Total by Team",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "gateway_cost_usd_total",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "title": "Request Rate by Team / Model (usage trends)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(gateway_requests_total[5m])",
+          "legendFormat": "{{team}} / {{model}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "title": "Budget Utilization — gap note",
+      "type": "text",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "options": {
+        "mode": "markdown",
+        "content": "**No budget-utilization Prometheus metric exists yet.**\n\nTRD §8's metric list (`gateway/observability/metrics.py`, step 1) has no gauge/counter for per-team budget-vs-limit ratio — only `gateway_cost_usd_total{team}` (cumulative spend). Budget *limits* live in Postgres (`teams.daily_budget_usd`/`monthly_budget_usd`), not Prometheus, so a utilization percentage can't be computed from scrape data alone without joining against that table.\n\nBudget-crossing-80% alerting is already handled out-of-band by the gateway-owned alert evaluator (ADR-027) reading Postgres/Redis directly — this panel intentionally does not fabricate a `gateway_budget_utilization` metric to fill the gap. See `/admin/teams/{team_id}/spend` for authoritative budget-vs-spend figures."
+      }
+    }
+  ]
+}

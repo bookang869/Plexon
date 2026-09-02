@@ -29,10 +29,10 @@
     {
       "step": 3,
       "name": "grafana-dashboards",
-      "status": "error",
-      "started_at": "2026-09-02T06:02:04+0900",
-      "error_message": "[failed after 3 attempts] Step did not update status",
-      "failed_at": "2026-09-02T06:02:13+0900"
+      "status": "completed",
+      "started_at": "2026-09-02T11:06:06+0900",
+      "summary": "Added deploy/grafana/provisioning/datasources/datasources.yml (Prometheus at http://prometheus:9090 as default, Tempo at http://tempo:3200, fixed uids for dashboard reference) and dashboards.yml (file provider, Plexon folder) plus three dashboard JSONs in provisioning/dashboards/json/ -- operations.json (gateway_circuit_breaker_state stat, gateway_circuit_breaker_transitions_total rate, gateway_errors_total rate by provider/error_type, gateway_fallback_triggered_total rate by from/to provider), business.json (gateway_cost_usd_total time series + table by team, gateway_requests_total rate by team/model, and a text panel documenting the budget-utilization metric gap rather than fabricating one), performance.json (histogram_quantile P50/P95/P99 over gateway_latency_seconds_bucket by provider, gateway_tokens_total rate by team/direction); added a grafana service to deploy/docker-compose.yml (port 3000, provisioning volume mount, anonymous Admin auth for demo login-free access, depends_on prometheus+tempo) -- marking the observability phase complete.",
+      "completed_at": "2026-09-02T11:20:00+0900"
     }
   ],
   "created_at": "2026-09-02T04:18:56+0900"
