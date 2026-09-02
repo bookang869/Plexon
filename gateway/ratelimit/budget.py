@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from gateway.auth.team_auth import Team
 from gateway.config.loader import PricingConfig
 from gateway.db import get_pool
+from gateway.observability.alerts import send_alert
 from gateway.redis_client import get_redis
 from gateway.schemas import Usage
 
@@ -60,6 +61,16 @@ def _daily_key(team_id: str) -> str:
 def _monthly_key(team_id: str) -> str:
     month = datetime.now(UTC).strftime("%Y-%m")
     return f"spend:{team_id}:monthly:{month}"
+
+
+def _alert_daily_key(team_id: str) -> str:
+    date = datetime.now(UTC).strftime("%Y-%m-%d")
+    return f"alerts:budget:{team_id}:daily:{date}"
+
+
+def _alert_monthly_key(team_id: str) -> str:
+    month = datetime.now(UTC).strftime("%Y-%m")
+    return f"alerts:budget:{team_id}:monthly:{month}"
 
 
 def _utilization(spend: Decimal, budget: Decimal) -> float:
@@ -104,6 +115,47 @@ async def check_budget(team: Team) -> BudgetStatus:
         daily_utilization=daily_utilization,
         monthly_utilization=monthly_utilization,
     )
+
+
+async def alert_on_budget_warning(team: Team, status: BudgetStatus) -> None:
+    """Fires a "team approaching budget cap" alert once per day/month per
+    team, not once per request -- check_budget runs on every request, so
+    naively alerting whenever a period's utilization has crossed 80% would
+    spam Slack for as long as the team stays above that line. Dedup state is
+    a Redis key scoped to the same period string check_budget itself uses
+    (SET NX, so concurrent requests within the same period only fire once);
+    the next day/month naturally gets a fresh key, so a later crossing can
+    alert again without any explicit clearing.
+    """
+    redis = get_redis()
+
+    if (
+        team.daily_budget_usd is not None
+        and status.daily_utilization is not None
+        and status.daily_utilization >= _WARNING_THRESHOLD
+    ):
+        first = await redis.set(_alert_daily_key(team.id), "1", nx=True, ex=_DAILY_TTL_SECONDS)
+        if first:
+            await send_alert(
+                "budget_warning",
+                f"team={team.id} crossed 80% of its daily budget "
+                f"(utilization={status.daily_utilization:.0%})",
+                {"team_id": team.id, "period": "daily", "utilization": status.daily_utilization},
+            )
+
+    if (
+        team.monthly_budget_usd is not None
+        and status.monthly_utilization is not None
+        and status.monthly_utilization >= _WARNING_THRESHOLD
+    ):
+        first = await redis.set(_alert_monthly_key(team.id), "1", nx=True, ex=_MONTHLY_TTL_SECONDS)
+        if first:
+            await send_alert(
+                "budget_warning",
+                f"team={team.id} crossed 80% of its monthly budget "
+                f"(utilization={status.monthly_utilization:.0%})",
+                {"team_id": team.id, "period": "monthly", "utilization": status.monthly_utilization},
+            )
 
 
 async def record_spend(

@@ -15,6 +15,7 @@ from redis.asyncio import Redis
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from gateway.config.loader import GatewayConfig
+from gateway.observability.metrics import gateway_fallback_triggered_total
 from gateway.providers.base import ProviderAdapter
 from gateway.providers.errors import (
     NonRetryableProviderError,
@@ -113,6 +114,10 @@ async def resolve_with_resilience(
             continue
 
         await record_success(redis, provider, decision.is_probe)
+        if index > 0:
+            gateway_fallback_triggered_total.labels(
+                from_provider=primary_provider, to_provider=provider
+            ).inc()
         return provider, model, result
 
     assert last_error is not None

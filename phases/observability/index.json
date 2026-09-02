@@ -1,0 +1,40 @@
+{
+  "project": "plexon",
+  "phase": "observability",
+  "steps": [
+    {
+      "step": 0,
+      "name": "otel-tracing",
+      "status": "completed",
+      "started_at": "2026-09-02T04:18:56+0900",
+      "summary": "Added gateway/observability/tracing.py (configure_tracing/get_tracer, OTLP gRPC exporter via BatchSpanProcessor, fail-open on setup error); wired a request.receipt root span in a gateway/main.py middleware plus auth (team_auth.py), rate_limit_check/provider_selection/provider_call/response_processing/response_delivery child spans in routes.py, each set with team_id/model_requested/model_served/input_tokens/output_tokens/cost_usd as those values become known; added tempo service + deploy/tempo/tempo.yaml to docker-compose.yml and opentelemetry deps to pyproject.toml; tests/test_tracing.py verifies span names, parent-child nesting, attributes, and fallback model_served divergence via InMemorySpanExporter.",
+      "completed_at": "2026-09-02T05:44:56+0900"
+    },
+    {
+      "step": 1,
+      "name": "prometheus-metrics",
+      "status": "completed",
+      "started_at": "2026-09-02T05:44:57+0900",
+      "summary": "Added gateway/observability/metrics.py (8 prometheus-client metric objects per TRD §8, no wrapper layer) + /metrics ASGI mount in gateway/main.py; wired gateway_requests_total/gateway_tokens_total/gateway_cost_usd_total into routes.py's _record_spend (serving-provider attribution, matching record_spend's convention) and gateway_requests_total/gateway_errors_total/gateway_latency_seconds into all four RetryableProviderError/NonRetryableProviderError except blocks (streaming + non-streaming), reusing the existing provider_call timing window; gateway_fallback_triggered_total incremented in orchestrator.py's resolve_with_resilience on index>0 success; gateway_circuit_breaker_transitions_total/gateway_circuit_breaker_state incremented in circuit_breaker.py's _record_transition, unconditionally of the Postgres history write; added deploy/prometheus/prometheus.yml + a prometheus service to docker-compose.yml, prometheus-client to pyproject.toml; recorded ADR-026 (prometheus-client direct-scrape vs. OTel metrics exporter, since TRD §9 has no OTel Collector service); tests/test_metrics.py covers success-path metrics, fallback attribution, exhausted-candidates errors, circuit-breaker transition+gauge, and the /metrics endpoint, with real-provider breaker-state cleanup to avoid polluting other test files' shared Redis state.",
+      "completed_at": "2026-09-02T05:52:54+0900"
+    },
+    {
+      "step": 2,
+      "name": "alerting",
+      "status": "completed",
+      "started_at": "2026-09-02T05:52:54+0900",
+      "summary": "Added gateway/observability/alerts.py (send_alert: POSTs to SLACK_WEBHOOK_URL via httpx or logs at WARNING when unset, always best-effort-writes an alert_history row, never raises) and gateway/observability/alert_evaluator.py (record_request_outcome feeds a 50-entry Redis list per provider independent of health_check.py's ping window per ADR-025; evaluate_provider computes error rate + a real P99 over that window and alerts only on a false->true breach transition, clearing the dedup key on recovery; run_alert_evaluator_loop/start_alert_evaluator_loop mirror health_check.py's loop shape, wired into main.py's lifespan); wired the two event-driven triggers -- circuit_breaker.py's _record_transition alerts unconditionally on to_state==OPEN (already once-per-transition, no extra dedup needed), budget.py's new alert_on_budget_warning (called from routes.py right after check_budget) alerts once per day/month per team via a period-scoped Redis SET NX key mirroring _daily_key/_monthly_key; wired record_request_outcome into all 6 gateway_latency_seconds call sites (streaming + non-streaming success/retryable/non-retryable) in routes.py; added AlertingConfig to config/loader.py + alerting: blocks to config.yaml/test_config.yaml, alert_history table to deploy/schema.sql, ADR-027 (gateway-owned Redis evaluator vs. Grafana Alerting rules, for pytest coverage per CLAUDE.md); fixed a teardown FK regression in tests/conftest.py's seeded_team and tests/test_budget.py's _delete_team (both now also clear alert_history before deleting the team) surfaced by wiring the real budget-alert call into the request path; tests/test_alerts.py + tests/test_alert_evaluator.py cover the sink's webhook/fallback/never-raises behavior, exactly-once circuit-breaker-open and budget-crossing alerts (incl. per-period independence and next-day re-arm), and the evaluator's breach/recover/re-breach transitions plus a static-import decoupling check from health_check.py.",
+      "completed_at": "2026-09-02T06:02:04+0900"
+    },
+    {
+      "step": 3,
+      "name": "grafana-dashboards",
+      "status": "completed",
+      "started_at": "2026-09-02T11:06:06+0900",
+      "summary": "Added deploy/grafana/provisioning/datasources/datasources.yml (Prometheus at http://prometheus:9090 as default, Tempo at http://tempo:3200, fixed uids for dashboard reference) and dashboards.yml (file provider, Plexon folder) plus three dashboard JSONs in provisioning/dashboards/json/ -- operations.json (gateway_circuit_breaker_state stat, gateway_circuit_breaker_transitions_total rate, gateway_errors_total rate by provider/error_type, gateway_fallback_triggered_total rate by from/to provider), business.json (gateway_cost_usd_total time series + table by team, gateway_requests_total rate by team/model, and a text panel documenting the budget-utilization metric gap rather than fabricating one), performance.json (histogram_quantile P50/P95/P99 over gateway_latency_seconds_bucket by provider, gateway_tokens_total rate by team/direction); added a grafana service to deploy/docker-compose.yml (port 3000, provisioning volume mount, anonymous Admin auth for demo login-free access, depends_on prometheus+tempo) -- marking the observability phase complete.",
+      "completed_at": "2026-09-02T11:10:47+0900"
+    }
+  ],
+  "created_at": "2026-09-02T04:18:56+0900",
+  "completed_at": "2026-09-02T11:10:47+0900"
+}

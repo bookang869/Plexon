@@ -42,3 +42,8 @@ pricing:
     claude-sonnet: { input_per_1k: 0.003, output_per_1k: 0.015 }
   ollama:
     llama3: { input_per_1k: 0.0, output_per_1k: 0.0 }
+
+alerting:
+  error_rate_threshold: 0.5        # fraction of the rolling window that failed
+  latency_p99_ms_threshold: 5000   # ms
+  evaluator_interval_seconds: 30

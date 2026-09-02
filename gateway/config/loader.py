@@ -70,6 +70,12 @@ class PricingConfig(BaseModel):
     ollama: dict[str, ModelPricing]
 
 
+class AlertingConfig(BaseModel):
+    error_rate_threshold: float
+    latency_p99_ms_threshold: int
+    evaluator_interval_seconds: int
+
+
 class GatewayConfig(BaseModel):
     providers: ProvidersConfig
     fallback_chains: FallbackChainsConfig
@@ -78,6 +84,7 @@ class GatewayConfig(BaseModel):
     priority_tiers: dict[str, PriorityTierConfig]
     enrichment_defaults: EnrichmentDefaults
     pricing: PricingConfig
+    alerting: AlertingConfig
 
 
 _config: GatewayConfig | None = None
