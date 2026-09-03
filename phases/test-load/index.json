@@ -12,7 +12,9 @@
     {
       "step": 1,
       "name": "integration-ratelimit-budget",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-03T10:50:00+0900",
+      "summary": "Added tests/integration/test_concurrent_ratelimit_budget.py (local client fixture + _insert_team/_delete_team helpers, small test-specific limits, no reuse of seeded_team): exact-count asyncio.gather assertions for rpm (10/30 admitted), tpm (3/10 admitted via explicit max_tokens sizing), and streaming (5/15 admitted) dimensions in isolation; budget test asserts only eventual consistency -- first wave's 200/402 split unasserted, second wave (post-settle) uniformly 402 once tracked spend exceeds a $0.00001 cap sized to guarantee crossing within 5 requests regardless of race outcome."
     },
     {
       "step": 2,
