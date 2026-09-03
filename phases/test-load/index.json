@@ -33,7 +33,9 @@
     {
       "step": 4,
       "name": "locust-load-test",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-03T11:15:15+0900",
+      "summary": "Added tests/load/locustfile.py (GatewayUser: weighted chat_completion/chat_completion_batch_priority/simulated_outage_request tasks picking a random team from scripts/demo_teams.json and a model from that team's own allowed_models, randomized X-Priority; DirectMockUser: low-weight baseline hitting mock-openai directly via an absolute URL, since Locust's runner unconditionally overwrites every User class' host attribute with --host, defeating a class-level host override; all HttpUsers set wait_time=between(0.5,2.0) so a small smoke run doesn't flood past per-team rpm/budget limits; gateway-overhead is reported only as an approximate direct-vs-gateway median comparison, not a fabricated precise figure); added locust to pyproject.toml's dev group and ran uv sync; appended claude-sonnet--fault-error to config.yaml's providers.anthropic.models and to the end of fallback_chains.fast_tier (original 3-entry chain preserved as a prefix, matching step 2's fixture-file pattern); appended claude-sonnet--fault-error to demo-realtime-highvolume's allowed_models in scripts/setup_demo_teams.py. Verified via the full stack: 20-user/15s headless smoke run against a locally built docker compose stack completed with 0 failures (exit code 0); full pytest suite (225 tests) passes against the updated config.yaml/fixtures unaffected."
     }
   ],
   "created_at": "2026-09-03T10:04:10+0900"
