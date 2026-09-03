@@ -26,7 +26,9 @@
     {
       "step": 3,
       "name": "ci-workflow",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-03T11:13:26+0900",
+      "summary": "Added .github/workflows/ci.yml (push+pull_request, any branch): single `test` job on ubuntu-latest with real GitHub Actions `services:` containers for postgres:16 (port 5433, health-checked via pg_isready) and redis:7 (port 6379, health-checked via redis-cli ping) per ADR-022, matching conftest.py's env-var defaults exactly with no port overrides needed; explicitly applies deploy/schema.sql via psql before tests (service containers have no init-mount equivalent); builds/starts mock-openai+mock-anthropic via docker compose with a curl --retry-connrefused wait loop, then runs `uv sync`, `ruff check .`, `pytest -v`, and tears down the mock containers with `if: always()`; no `secrets.*` references anywhere, confirming zero API keys required (ADR-006)."
     },
     {
       "step": 4,
