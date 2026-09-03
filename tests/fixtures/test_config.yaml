@@ -7,13 +7,22 @@ providers:
     models: ["gpt-4o", "gpt-4o-mini"]
   anthropic:
     base_url: "http://localhost:8082"
-    models: ["claude-opus", "claude-sonnet"]
+    models: ["claude-opus", "claude-sonnet", "claude-sonnet--fault-error"]
   ollama:
     base_url: "http://localhost:11434"
     models: ["llama3"]
 
 fallback_chains:
-  fast_tier: [anthropic:claude-sonnet, openai:gpt-4o-mini, ollama:llama3]
+  # anthropic:claude-sonnet--fault-error, openai:gpt-4o-mini prepended ahead of
+  # the original 3-entry block (kept intact, unreordered, as a contiguous
+  # suffix) rather than appended after it: resolve_fallback_chain() finds a
+  # target's *first* occurrence and returns everything after it in this flat
+  # list, so appending after ollama:llama3 would make it no longer resolve to
+  # [] (breaking test_fallback.py's "last entry" test) and would sweep the new
+  # entries into anthropic:claude-sonnet's own remaining chain too (breaking
+  # its "exactly 2 entries" test and test_orchestrator.py's fixed-length
+  # candidate-list tests). Prepending keeps every existing lookup identical.
+  fast_tier: [anthropic:claude-sonnet--fault-error, openai:gpt-4o-mini, anthropic:claude-sonnet, openai:gpt-4o-mini, ollama:llama3]
   frontier_tier: [anthropic:claude-opus, openai:gpt-4o]
 
 circuit_breaker:
