@@ -24,6 +24,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "ruff",
+    "locust",
 ]
 
 [tool.ruff]

@@ -4,13 +4,13 @@ providers:
     models: ["gpt-4o", "gpt-4o-mini"]
   anthropic:
     base_url: "http://mock-anthropic:8080"
-    models: ["claude-opus", "claude-sonnet"]
+    models: ["claude-opus", "claude-sonnet", "claude-sonnet--fault-error"]
   ollama:
     base_url: "http://ollama:11434"
     models: ["llama3"]
 
 fallback_chains:
-  fast_tier: [anthropic:claude-sonnet, openai:gpt-4o-mini, ollama:llama3]
+  fast_tier: [anthropic:claude-sonnet, openai:gpt-4o-mini, ollama:llama3, anthropic:claude-sonnet--fault-error, openai:gpt-4o-mini, ollama:llama3]
   frontier_tier: [anthropic:claude-opus, openai:gpt-4o]
 
 circuit_breaker:

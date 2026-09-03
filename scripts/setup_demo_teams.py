@@ -41,6 +41,7 @@ DEMO_TEAMS: list[dict] = [
             "gpt-4o",
             "gpt-4o-mini",
             "llama3",
+            "claude-sonnet--fault-error",
         ],
     },
     {
