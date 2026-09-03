@@ -19,6 +19,10 @@
       "dir": "observability",
       "status": "completed",
       "completed_at": "2026-09-02T11:10:47+0900"
+    },
+    {
+      "dir": "test-load",
+      "status": "pending"
     }
   ]
 }
