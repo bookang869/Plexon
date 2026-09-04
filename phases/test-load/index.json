@@ -1,0 +1,44 @@
+{
+  "project": "plexon",
+  "phase": "test-load",
+  "steps": [
+    {
+      "step": 0,
+      "name": "demo-teams-script",
+      "status": "completed",
+      "started_at": "2026-09-03T10:04:10+0900",
+      "summary": "Added scripts/setup_demo_teams.py (idempotent, direct-pool seeding via gateway.db, four fixed-id demo teams: demo-realtime-highvolume, demo-batch-lowpriority, demo-tight-budget, demo-frontier, allowed_models drawn from config.yaml with claude-sonnet/claude-opus listed first per ADR-008) writing scripts/demo_teams.json (list of {team_id, name, api_key, rpm_limit, tpm_limit, daily_budget_usd, monthly_budget_usd, allowed_models}, gitignored); added the `setup` one-shot service to deploy/docker-compose.yml and `COPY scripts ./scripts` to the Dockerfile."
+    },
+    {
+      "step": 1,
+      "name": "integration-ratelimit-budget",
+      "status": "completed",
+      "started_at": "2026-09-03T10:50:00+0900",
+      "summary": "Added tests/integration/test_concurrent_ratelimit_budget.py (local client fixture + _insert_team/_delete_team helpers, small test-specific limits, no reuse of seeded_team): exact-count asyncio.gather assertions for rpm (10/30 admitted), tpm (3/10 admitted via explicit max_tokens sizing), and streaming (5/15 admitted) dimensions in isolation; budget test asserts only eventual consistency -- first wave's 200/402 split unasserted, second wave (post-settle) uniformly 402 once tracked spend exceeds a $0.00001 cap sized to guarantee crossing within 5 requests regardless of race outcome."
+    },
+    {
+      "step": 2,
+      "name": "integration-resilience",
+      "status": "completed",
+      "started_at": "2026-09-03T11:01:09+0900",
+      "summary": "Added tests/integration/test_concurrent_resilience.py (local client fixture, _insert_team/_delete_team helpers, anthropic_breaker fixture resetting the shared anthropic breaker's Redis keys + circuit_breaker_history rows before/after each test) covering concurrent fallback activation (10x claude-sonnet--fault-error all served 200/gpt-4o-mini), concurrent circuit-breaker open->half_open->open under real HTTP traffic (asserts closed->open history row after 10 concurrent failures, no new row while open, then open->half_open and half_open->open rows after a real 30s cooldown sleep), and concurrent streaming integrity (10 concurrent gpt-4o-mini/claude-sonnet streams with distinctive per-request prompts, reusing test_streaming.py's _read_sse/_assemble_content, asserting no cross-request model/content leakage); edited tests/fixtures/test_config.yaml adding claude-sonnet--fault-error to providers.anthropic.models and prepending [anthropic:claude-sonnet--fault-error, openai:gpt-4o-mini] ahead of the existing 3-entry fast_tier block (rather than appending after it as originally sketched) since resolve_fallback_chain() returns everything after a target's first occurrence in the flat list -- appending after ollama:llama3 would have broken its 'resolves to []' invariant and swept the new entries into anthropic:claude-sonnet's own chain, breaking test_fallback.py and test_orchestrator.py; the original 3-entry block is preserved fully intact and unreordered as a contiguous suffix, so every pre-existing lookup is unaffected. Full suite (225 tests) passes."
+    },
+    {
+      "step": 3,
+      "name": "ci-workflow",
+      "status": "completed",
+      "started_at": "2026-09-03T11:13:26+0900",
+      "summary": "Added .github/workflows/ci.yml (push+pull_request, any branch): single `test` job on ubuntu-latest with real GitHub Actions `services:` containers for postgres:16 (port 5433, health-checked via pg_isready) and redis:7 (port 6379, health-checked via redis-cli ping) per ADR-022, matching conftest.py's env-var defaults exactly with no port overrides needed; explicitly applies deploy/schema.sql via psql before tests (service containers have no init-mount equivalent); builds/starts mock-openai+mock-anthropic via docker compose with a curl --retry-connrefused wait loop, then runs `uv sync`, `ruff check .`, `pytest -v`, and tears down the mock containers with `if: always()`; no `secrets.*` references anywhere, confirming zero API keys required (ADR-006)."
+    },
+    {
+      "step": 4,
+      "name": "locust-load-test",
+      "status": "completed",
+      "started_at": "2026-09-03T11:15:15+0900",
+      "summary": "Added tests/load/locustfile.py (GatewayUser: weighted chat_completion/chat_completion_batch_priority/simulated_outage_request tasks picking a random team from scripts/demo_teams.json and a model from that team's own allowed_models, randomized X-Priority; DirectMockUser: low-weight baseline hitting mock-openai directly via an absolute URL, since Locust's runner unconditionally overwrites every User class' host attribute with --host, defeating a class-level host override; all HttpUsers set wait_time=between(0.5,2.0) so a small smoke run doesn't flood past per-team rpm/budget limits; gateway-overhead is reported only as an approximate direct-vs-gateway median comparison, not a fabricated precise figure); added locust to pyproject.toml's dev group and ran uv sync; appended claude-sonnet--fault-error to config.yaml's providers.anthropic.models and to the end of fallback_chains.fast_tier (original 3-entry chain preserved as a prefix, matching step 2's fixture-file pattern); appended claude-sonnet--fault-error to demo-realtime-highvolume's allowed_models in scripts/setup_demo_teams.py. Verified via the full stack: 20-user/15s headless smoke run against a locally built docker compose stack completed with 0 failures (exit code 0); full pytest suite (225 tests) passes against the updated config.yaml/fixtures unaffected.",
+      "completed_at": "2026-09-03T11:25:00+0900"
+    }
+  ],
+  "created_at": "2026-09-03T10:04:10+0900",
+  "completed_at": "2026-09-03T11:25:00+0900"
+}

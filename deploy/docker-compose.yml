@@ -64,6 +64,18 @@ services:
       - redis
       - tempo
 
+  setup:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      PLEXON_DATABASE_URL: "postgresql://plexon:plexon@postgres:5432/plexon"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python3", "scripts/setup_demo_teams.py"]
+    restart: "no"
+
   prometheus:
     image: prom/prometheus:latest
     volumes:

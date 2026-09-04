@@ -9,6 +9,7 @@ RUN uv sync --frozen --no-dev
 
 COPY gateway ./gateway
 COPY config.yaml ./config.yaml
+COPY scripts ./scripts
 
 ENV PATH="/app/.venv/bin:$PATH"
 

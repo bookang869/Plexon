@@ -8,7 +8,7 @@ Callers talk to Plexon exactly like they'd talk to OpenAI's Chat Completions API
 
 ## Status
 
-Phases 0 (`proxy-layer`), 1 (`ratelimit-budget`), and 2 (`resilience`) are merged; phase 3 (`observability`) is complete and in this PR — every request is now traced end-to-end (Grafana Tempo), Prometheus metrics feed three provisioned Grafana dashboards, and Slack gets paged when a circuit breaker opens, a team crosses 80% of budget, or a provider's error rate/P99 latency breaches threshold. The load-tested full stack is still ahead — see [Build Plan](#build-plan) below for progress.
+Phases 0 (`proxy-layer`), 1 (`ratelimit-budget`), 2 (`resilience`), and 3 (`observability`) are merged; phase 4 (`test-load`) is complete and in this PR — a demo-teams seed script, an integration test suite proving rate-limiting/budget/fallback/circuit-breaker behavior under real concurrent load, a GitHub Actions CI workflow running that suite against real Redis/Postgres/mock-provider containers on every push, and a Locust load test exercising the full stack. This is the last automated Harness phase — see [Build Plan](#build-plan) below.
 
 ## Why This Project
 
@@ -53,21 +53,27 @@ flowchart TB
 
     HC["Health Check Loop\n30s ping/provider — dashboard only,\nnever gates routing"]
 
-    subgraph OBS["Observability ★"]
+    subgraph OBS["Observability"]
         direction LR
-        TRACE["OTel Spans ★\nrequest.receipt → auth →\nrate_limit_check → ... → response_delivery"]
-        METRICS["/metrics ★\nrequests · errors · latency ·\ntokens · cost · fallbacks · breaker state"]
-        ALERT["Alert Evaluator Loop ★\n30s tick — error-rate/P99 breach\n→ Slack (+ breaker-open, budget-80%)"]
+        TRACE["OTel Spans\nrequest.receipt → auth →\nrate_limit_check → ... → response_delivery"]
+        METRICS["/metrics\nrequests · errors · latency ·\ntokens · cost · fallbacks · breaker state"]
+        ALERT["Alert Evaluator Loop\n30s tick — error-rate/P99 breach\n→ Slack (+ breaker-open, budget-80%)"]
     end
 
-    REDIS[("Redis\ntoken buckets + spend counters +\ncircuit-breaker state + health status +\nalert windows ★")]
-    PG[("PostgreSQL\nteam config, spend ledger, audit log,\nbreaker/health history, alert history ★")]
-    YAML["YAML Config\nprovider/model map + fallback chains +\npricing + alert thresholds ★"]
+    subgraph VERIFY["Test & Load ★"]
+        direction LR
+        CI["CI ★\nGitHub Actions — lint + full suite\nvs. real Redis/Postgres/mocks, every push"]
+        ITEST["Integration Suite ★\nconcurrent rate-limit/budget/\nfallback/breaker under real load"]
+        LOCUST["Locust ★\n5,000+ concurrent requests,\nmixed teams/models/priorities"]
+    end
+
+    REDIS[("Redis\ntoken buckets + spend counters +\ncircuit-breaker state + health status +\nalert windows")]
+    PG[("PostgreSQL\nteam config, spend ledger, audit log,\nbreaker/health history, alert history")]
+    YAML["YAML Config\nprovider/model map + fallback chains +\npricing + alert thresholds"]
     PROV["Providers\nOpenAI (mock) · Anthropic (mock) · Ollama (real)"]
-    TEMPO[("Grafana Tempo ★\ntrace storage")]
-    PROMSVC[("Prometheus ★\nmetrics scrape")]
-    GRAFANA["Grafana Dashboards ★\nOperations · Business · Performance"]
-    LATER["Not yet built:\nintegration test suite + Locust load test"]
+    TEMPO[("Grafana Tempo\ntrace storage")]
+    PROMSVC[("Prometheus\nmetrics scrape")]
+    GRAFANA["Grafana Dashboards\nOperations · Business · Performance"]
 
     TC --> AUTH
     LEDGER --> TC
@@ -92,15 +98,16 @@ flowchart TB
     ALERT --> OP
     PROMSVC --> GRAFANA
     TEMPO --> GRAFANA
+    CI --> GW
+    ITEST --> GW
+    LOCUST --> GW
 
     classDef new fill:#0f948814,stroke:#0f9488,stroke-width:1.5px,color:inherit;
-    class OBS,TRACE,METRICS,ALERT,TEMPO,PROMSVC,GRAFANA new;
-    classDef later fill:none,stroke:#999,stroke-dasharray: 4 3,color:#999;
-    class LATER later;
+    class VERIFY,CI,ITEST,LOCUST new;
 ```
-★ = added this phase (`observability`)
+★ = added this phase (`test-load`)
 
-`auth` reads Postgres for team keys/config; `rate limit` and `budget check` run against Redis before the request is allowed to proceed (429 / 402 respectively), gating `enrichment` and `provider select` exactly like before. `provider select` resolves the requested model to a primary provider; `retry + fallback` checks that provider's circuit breaker, retries the primary up to 3x with backoff on transient errors, and on exhaustion walks the model's fallback chain, skipping any provider whose breaker is open. `reconcile + spend` records cost against whichever provider actually served the response. New this phase: every request opens a root `request.receipt` span with child spans for each pipeline stage, exported to Tempo; every stage also increments Prometheus counters/histograms/gauges scraped off `/metrics`, feeding three provisioned Grafana dashboards. A background alert evaluator loop reads a rolling window of real request outcomes per provider from Redis and pages Slack on an error-rate or P99-latency breach (dedup'd to fire once per crossing, not once per tick); the circuit breaker and budget-check paths page Slack directly on breaker-open and 80%-budget-crossed respectively. Every alert is also persisted to Postgres (`alert_history`) regardless of whether the Slack webhook is configured. Full end-state request-flow spec in [`docs/TRD.md`](docs/TRD.md) §3.
+`auth` reads Postgres for team keys/config; `rate limit` and `budget check` run against Redis before the request is allowed to proceed (429 / 402 respectively), gating `enrichment` and `provider select` exactly like before. `provider select` resolves the requested model to a primary provider; `retry + fallback` checks that provider's circuit breaker, retries the primary up to 3x with backoff on transient errors, and on exhaustion walks the model's fallback chain, skipping any provider whose breaker is open. `reconcile + spend` records cost against whichever provider actually served the response; every request opens a root `request.receipt` span exported to Tempo and increments Prometheus counters/histograms/gauges scraped off `/metrics`, feeding three provisioned Grafana dashboards; a background alert evaluator loop pages Slack on an error-rate or P99-latency breach, and the circuit breaker/budget-check paths page Slack directly on breaker-open and 80%-budget-crossed. New this phase: a GitHub Actions CI workflow runs the full lint + test suite against real Redis/Postgres/mock-provider containers on every push; an integration test suite proves rate-limiting, budget enforcement, fallback activation, and circuit-breaker open/close hold up under real concurrent load (not just single-request unit tests); and a Locust scenario drives 5,000+ concurrent requests across mixed teams/models/priorities against the full Docker Compose stack, including a continuous simulated-outage task that keeps exercising the fallback/breaker path throughout the run. Full end-state request-flow spec in [`docs/TRD.md`](docs/TRD.md) §3.
 
 **State is split three ways, by change frequency and durability:**
 
@@ -197,8 +204,8 @@ Implementation is split into 5 [Harness](.claude/commands/harness.md) phases, ea
 | 0 | `proxy-layer` | Project setup, provider abstraction, auth/routing, streaming passthrough, enrichment | ✅ merged |
 | 1 | `ratelimit-budget` | Token buckets, budget caps, tiered limits, admin API | ✅ merged |
 | 2 | `resilience` | Health checks, fallback routing, retry/backoff, circuit breakers | ✅ merged |
-| 3 | `observability` | OTel spans, Prometheus metrics, Grafana dashboards, alerting | 🔨 this PR |
-| 4 | `test-load` | Integration test suite, Locust load test, full Docker Compose stack | ⏳ not started |
+| 3 | `observability` | OTel spans, Prometheus metrics, Grafana dashboards, alerting | ✅ merged |
+| 4 | `test-load` | Integration test suite, Locust load test, full Docker Compose stack | 🔨 this PR |
 
 A final polish phase (demo recording + narrative) is done manually, outside Harness.
 

@@ -10,6 +10,9 @@ venv/
 phases/**/phase*-output.json
 phases/**/step*-output.json
 
+# generated demo team API keys (freshly minted on every setup_demo_teams.py run)
+scripts/demo_teams.json
+
 # original assignment brief, kept locally for reference only
 ORIGINAL_BRIEF.md
 

@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: plexon
+          POSTGRES_USER: plexon
+          POSTGRES_PASSWORD: plexon
+        ports:
+          - "5433:5432"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Apply schema
+        run: PGPASSWORD=plexon psql -h localhost -p 5433 -U plexon -d plexon -f deploy/schema.sql
+
+      - name: Build and start mock providers
+        run: docker compose -f deploy/docker-compose.yml up -d --build mock-openai mock-anthropic
+
+      - name: Wait for mock providers
+        run: |
+          curl --retry 10 --retry-delay 2 --retry-all-errors -s http://localhost:8081/ -o /dev/null
+          curl --retry 10 --retry-delay 2 --retry-all-errors -s http://localhost:8082/ -o /dev/null
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Test
+        run: uv run pytest -v
+
+      - name: Tear down mock providers
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down
