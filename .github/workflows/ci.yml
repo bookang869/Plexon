@@ -51,8 +51,8 @@ jobs:
 
       - name: Wait for mock providers
         run: |
-          curl --retry 10 --retry-delay 2 --retry-connrefused -s http://localhost:8081/ -o /dev/null
-          curl --retry 10 --retry-delay 2 --retry-connrefused -s http://localhost:8082/ -o /dev/null
+          curl --retry 10 --retry-delay 2 --retry-all-errors -s http://localhost:8081/ -o /dev/null
+          curl --retry 10 --retry-delay 2 --retry-all-errors -s http://localhost:8082/ -o /dev/null
 
       - name: Lint
         run: uv run ruff check .
