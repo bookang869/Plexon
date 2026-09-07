@@ -8,7 +8,7 @@
       "status": "completed",
       "started_at": "2026-09-08T08:47:17+0900",
       "summary": "Added benchmarks/ package (__init__.py, common.py with gateway_client/run_concurrent/percentiles/histogram_percentiles_from_metrics_text/BenchmarkResult/write_result/print_summary, thresholds.py's 8 named constants, conftest.py's db_pool/benchmark_team fixtures mirroring tests/conftest.py against gateway.db, test_common.py + test_thresholds.py unit tests) plus pyproject.toml's [tool.pytest.ini_options] (benchmark marker + addopts = \"-m 'not benchmark'\") and .gitignore's benchmarks/results/ entry; verified addopts leaves the existing 225-test suite's pass count unchanged (231 total with the 6 new plain unit tests) and that a @pytest.mark.benchmark test is excluded by default but selected via -m benchmark.",
-      "completed_at": "2026-09-08T09:00:00+0900"
+      "completed_at": "2026-09-08T08:56:57+0900"
     },
     {
       "step": 1,
