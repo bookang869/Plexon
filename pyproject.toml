@@ -27,6 +27,12 @@ dev = [
     "locust",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "benchmark: performance benchmark, excluded from default `pytest` runs -- invoke via `pytest -m benchmark` or `pytest benchmarks/`",
+]
+addopts = "-m 'not benchmark'"
+
 [tool.ruff]
 line-length = 100
 

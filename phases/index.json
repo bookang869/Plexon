@@ -24,6 +24,10 @@
       "dir": "test-load",
       "status": "completed",
       "completed_at": "2026-09-03T11:25:00+0900"
+    },
+    {
+      "dir": "benchmarks",
+      "status": "pending"
     }
   ]
 }
