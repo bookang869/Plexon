@@ -8,6 +8,11 @@ breaker, so the `anthropic_breaker` fixture below resets it before and after
 every test to keep other test files/benchmarks that touch `anthropic`
 order-independent.
 
+The reliability/switch-latency test runs multiple independent outage trials
+(`_OUTAGE_TRIALS`), resetting the breaker to closed between each, so the
+reported reliability percentage is backed by a larger pooled sample than any
+single 20-request wave.
+
 Fault injection uses the magic model-name suffix (ADR-025):
 `claude-sonnet--fault-error` always returns an instant HTTP 500 from
 mock-anthropic, classified RetryableProviderError (gateway/providers/
@@ -19,6 +24,7 @@ model is needed to exercise the retry -> fallback -> circuit-breaker path
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 
 import pytest
@@ -47,12 +53,33 @@ _FALLBACK_MODEL = "gpt-4o-mini"
 
 _config_loaded = False
 
+# Independent outage trials the reliability/switch-latency test runs, each
+# starting from a freshly-closed breaker -- env-overridable for local
+# tuning without editing the file.
+_OUTAGE_TRIALS = int(os.environ.get("PLEXON_BENCHMARK_FAILOVER_TRIALS", "5"))
+
 
 def _ensure_config_loaded() -> None:
     global _config_loaded
     if not _config_loaded:
         start_config_watcher()
         _config_loaded = True
+
+
+async def _reset_anthropic_breaker(redis_client, db_pool) -> None:
+    """Deletes the shared `anthropic` provider's breaker state (Redis keys +
+    circuit_breaker_history rows) -- shared by the `anthropic_breaker`
+    fixture and the per-trial reset in
+    test_failover_reliability_and_switch_latency so every trial starts from
+    a closed breaker.
+    """
+    await redis_client.delete(
+        _state_key("anthropic"),
+        _failures_key("anthropic"),
+        _opened_at_key("anthropic"),
+        _probe_claimed_key("anthropic"),
+    )
+    await db_pool.execute("DELETE FROM circuit_breaker_history WHERE provider = 'anthropic'")
 
 
 @pytest_asyncio.fixture
@@ -62,19 +89,9 @@ async def anthropic_breaker(redis_client, db_pool):
     tests/integration/test_concurrent_resilience.py's `anthropic_breaker`
     fixture.
     """
-
-    async def _reset() -> None:
-        await redis_client.delete(
-            _state_key("anthropic"),
-            _failures_key("anthropic"),
-            _opened_at_key("anthropic"),
-            _probe_claimed_key("anthropic"),
-        )
-        await db_pool.execute("DELETE FROM circuit_breaker_history WHERE provider = 'anthropic'")
-
-    await _reset()
+    await _reset_anthropic_breaker(redis_client, db_pool)
     yield
-    await _reset()
+    await _reset_anthropic_breaker(redis_client, db_pool)
 
 
 def _fault_payload() -> dict:
@@ -83,53 +100,82 @@ def _fault_payload() -> dict:
 
 @pytest.mark.benchmark
 @pytest.mark.asyncio
-async def test_failover_reliability_and_switch_latency(benchmark_team, anthropic_breaker):
+async def test_failover_reliability_and_switch_latency(
+    benchmark_team, anthropic_breaker, redis_client, db_pool
+):
     client = await gateway_client()
     headers = {"Authorization": f"Bearer {benchmark_team['api_key']}"}
-    try:
-        _TOTAL_REQUESTS = 20
+    _TOTAL_REQUESTS = 20
 
-        async def _make_request() -> LatencySample:
-            started = time.monotonic()
-            resp = await client.post("/v1/chat/completions", json=_fault_payload(), headers=headers)
-            return LatencySample(
-                started_at=started,
-                elapsed_seconds=time.monotonic() - started,
-                success=resp.status_code == 200 and resp.json().get("model") == _FALLBACK_MODEL,
-            )
-
-        samples = await run_concurrent(
-            _make_request, concurrency=_TOTAL_REQUESTS, total_requests=_TOTAL_REQUESTS
+    async def _make_request() -> LatencySample:
+        started = time.monotonic()
+        resp = await client.post("/v1/chat/completions", json=_fault_payload(), headers=headers)
+        return LatencySample(
+            started_at=started,
+            elapsed_seconds=time.monotonic() - started,
+            success=resp.status_code == 200 and resp.json().get("model") == _FALLBACK_MODEL,
         )
+
+    per_trial: list[dict] = []
+    pooled_successful_elapsed: list[float] = []
+    total_success_count = 0
+    total_requests_all_trials = 0
+
+    try:
+        for trial in range(_OUTAGE_TRIALS):
+            # Breaker must start closed each trial -- otherwise a breaker
+            # left open from trial N would make trial N+1's requests fail
+            # differently (served by fallback without ever retrying the
+            # primary), skewing switch-latency numbers for reasons unrelated
+            # to reliability.
+            await _reset_anthropic_breaker(redis_client, db_pool)
+
+            samples = await run_concurrent(
+                _make_request, concurrency=_TOTAL_REQUESTS, total_requests=_TOTAL_REQUESTS
+            )
+            successes = [s for s in samples if s.success]
+
+            per_trial.append(
+                {
+                    "trial": trial,
+                    "total_requests": len(samples),
+                    "success_count": len(successes),
+                    "reliability_pct": 100.0 * len(successes) / len(samples),
+                }
+            )
+            pooled_successful_elapsed.extend(s.elapsed_seconds for s in successes)
+            total_success_count += len(successes)
+            total_requests_all_trials += len(samples)
     finally:
         await client.aclose()
 
-    successes = [s for s in samples if s.success]
-    reliability_pct = 100.0 * len(successes) / len(samples)
-    switch_quantiles = percentiles([s.elapsed_seconds for s in successes])
+    overall_reliability_pct = 100.0 * total_success_count / total_requests_all_trials
+    switch_quantiles = percentiles(pooled_successful_elapsed)
     failover_switch_p95_seconds = switch_quantiles[0.95]
 
     result = BenchmarkResult(
         name="failover_reliability",
         metrics={
-            "total_requests": len(samples),
-            "reliability_pct": reliability_pct,
+            "trials": _OUTAGE_TRIALS,
+            "total_requests_all_trials": total_requests_all_trials,
+            "overall_reliability_pct": overall_reliability_pct,
             "failover_switch_p50_seconds": switch_quantiles[0.5],
             "failover_switch_p95_seconds": failover_switch_p95_seconds,
             "failover_switch_p99_seconds": switch_quantiles[0.99],
+            "per_trial": per_trial,
         },
         thresholds={
             "reliability_min_pct": thresholds.FAILOVER_RELIABILITY_MIN_PCT,
             "switch_max_seconds": thresholds.FAILOVER_SWITCH_MAX_SECONDS,
         },
         passed=(
-            reliability_pct >= thresholds.FAILOVER_RELIABILITY_MIN_PCT
+            overall_reliability_pct >= thresholds.FAILOVER_RELIABILITY_MIN_PCT
             and failover_switch_p95_seconds < thresholds.FAILOVER_SWITCH_MAX_SECONDS
         ),
     )
     write_result(result)
 
-    assert reliability_pct >= thresholds.FAILOVER_RELIABILITY_MIN_PCT
+    assert overall_reliability_pct >= thresholds.FAILOVER_RELIABILITY_MIN_PCT
     assert failover_switch_p95_seconds < thresholds.FAILOVER_SWITCH_MAX_SECONDS
 
 
