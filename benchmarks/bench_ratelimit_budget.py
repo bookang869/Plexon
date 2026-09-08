@@ -22,10 +22,18 @@ Each test uses its own dedicated, tightly-sized team (not the shared
 stays observable within a practical request count -- `benchmark_team`'s
 generous limits, sized for throughput/overhead/failover benchmarks, would
 require an impractically large N here.
+
+The rpm admission-accuracy test runs its 200-concurrent wave across
+`_RPM_TRIALS` independent trials (each against a fresh team, since the
+token bucket's window state is per-team in Redis) to accumulate a larger
+aggregate sample (~10,000 requests by default) than a single wave can
+provide, reporting "0 incorrect admissions across N requests" rather than
+"correct once".
 """
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -104,11 +112,14 @@ async def _make_status_request(client: httpx.AsyncClient, headers: dict) -> _Sta
 
 _RPM_LIMIT = 30
 _RPM_TOTAL_REQUESTS = 200
+# 50 trials x 200 requests/trial = ~10,000 total requests, a large enough
+# aggregate sample to report "0 incorrect admissions across N requests"
+# rather than "correct once". Each trial uses a fresh team (see module
+# docstring) so the sample stays N independent from-cold admission tests.
+_RPM_TRIALS = int(os.environ.get("PLEXON_BENCHMARK_RATELIMIT_TRIALS", "50"))
 
 
-@pytest.mark.benchmark
-@pytest.mark.asyncio
-async def test_rpm_admission_accuracy_at_higher_concurrency(db_pool):
+async def _run_rpm_trial(db_pool, trial: int) -> dict:
     team = await _insert_team(db_pool, rpm_limit=_RPM_LIMIT, tpm_limit=100_000_000)
 
     # A dedicated client with a raised connection-pool ceiling: the default
@@ -138,26 +149,55 @@ async def test_rpm_admission_accuracy_at_higher_concurrency(db_pool):
     rejected = [s for s in samples if s.status_code == 429]
     assert len(admitted) + len(rejected) == len(samples), "unexpected non-200/429 status in wave"
 
-    rejection_quantiles = percentiles([s.elapsed_seconds for s in rejected])
+    return {
+        "trial": trial,
+        "admitted_count": len(admitted),
+        "rejected_count": len(rejected),
+        "rejected_latencies_seconds": [s.elapsed_seconds for s in rejected],
+    }
+
+
+@pytest.mark.benchmark
+@pytest.mark.asyncio
+async def test_rpm_admission_accuracy_at_higher_concurrency(db_pool):
+    trial_results = [await _run_rpm_trial(db_pool, trial) for trial in range(_RPM_TRIALS)]
+
+    total_requests = sum(t["admitted_count"] + t["rejected_count"] for t in trial_results)
+    incorrect_admission_count = sum(
+        abs(t["admitted_count"] - _RPM_LIMIT) for t in trial_results
+    )
+    pooled_rejected_latencies = [
+        latency for t in trial_results for latency in t["rejected_latencies_seconds"]
+    ]
+    rejection_quantiles = percentiles(pooled_rejected_latencies)
     rejection_p95_ms = rejection_quantiles[0.95] * 1000
+
+    per_trial = [
+        {
+            "trial": t["trial"],
+            "admitted_count": t["admitted_count"],
+            "rejected_count": t["rejected_count"],
+        }
+        for t in trial_results
+    ]
 
     result = BenchmarkResult(
         name="ratelimit_admission_accuracy",
         metrics={
-            "rpm_limit": _RPM_LIMIT,
-            "total_requests": _RPM_TOTAL_REQUESTS,
-            "admitted_count": len(admitted),
-            "rejected_count": len(rejected),
+            "trials": _RPM_TRIALS,
+            "total_requests": total_requests,
+            "incorrect_admission_count": incorrect_admission_count,
             "rejection_p50_ms": rejection_quantiles[0.5] * 1000,
             "rejection_p95_ms": rejection_p95_ms,
             "rejection_p99_ms": rejection_quantiles[0.99] * 1000,
+            "per_trial": per_trial,
         },
         thresholds={
-            "expected_admitted": _RPM_LIMIT,
+            "expected_incorrect_admissions": 0,
             "rejection_p95_max_ms": thresholds.RATELIMIT_REJECTION_P95_MAX_MS,
         },
         passed=(
-            len(admitted) == _RPM_LIMIT
+            incorrect_admission_count == 0
             and rejection_p95_ms < thresholds.RATELIMIT_REJECTION_P95_MAX_MS
         ),
     )
@@ -165,7 +205,7 @@ async def test_rpm_admission_accuracy_at_higher_concurrency(db_pool):
 
     # Exact, not a tolerance range: check_and_consume is a single atomic
     # Redis EVAL, so over/under-admission at any concurrency is a genuine bug.
-    assert len(admitted) == _RPM_LIMIT
+    assert incorrect_admission_count == 0
     assert rejection_p95_ms < thresholds.RATELIMIT_REJECTION_P95_MAX_MS
 
 

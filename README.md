@@ -226,7 +226,7 @@ python3 scripts/setup_demo_teams.py
 - Gateway-only overhead latency (P50/P95/P99) across the same concurrency sweep, read off the `gateway_overhead_seconds` Prometheus histogram — concurrency=5 is the calibrated pass/fail gate against `OVERHEAD_P95_MS`
 - Failover reliability and switch latency when a provider starts failing, run as multiple independent outage trials (default 5 × 20 requests) with the breaker reset to closed between each, reporting the aggregate request count behind the pooled reliability percentage
 - Circuit-breaker recovery latency after cooldown
-- Rate-limit admission accuracy and budget-overshoot bounds under concurrent load
+- Rate-limit admission accuracy (pooled across `_RPM_TRIALS` independent 200-concurrent trials against fresh teams, ~10,000 requests total by default) and budget-overshoot bounds under concurrent load
 
 **How to run:**
 
