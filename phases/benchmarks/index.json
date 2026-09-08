@@ -29,7 +29,9 @@
     {
       "step": 3,
       "name": "failover-benchmark",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-08T09:32:13+0900",
+      "summary": "Added benchmarks/bench_failover.py's test_failover_reliability_and_switch_latency (20 concurrent claude-sonnet--fault-error requests against the real anthropic provider, measuring reliability_pct and client-side p95 switch latency) and test_circuit_breaker_recovery_latency (drives failure_threshold+5 concurrent fault requests to open anthropic's breaker, reads circuit_breaker_history's closed->open created_at, sleeps the real config.circuit_breaker.cooldown_seconds, sends one claude-sonnet probe, reads the half_open->closed created_at, asserts recovery_seconds < cooldown_seconds + thresholds.RECOVERY_MAX_SECONDS_OVER_COOLDOWN), both using a local anthropic_breaker fixture (same reset technique as tests/integration/test_concurrent_resilience.py) plus a new benchmarks/conftest.py redis_client fixture and benchmark_team's allowed_models extended with claude-sonnet--fault-error; measured reliability 100% (>=95% threshold), failover-switch p95 ~0.78s (<5s threshold), recovery ~30.08s (<40s threshold) -- all passing, and confirmed no residual Redis breaker keys or circuit_breaker_history rows for anthropic after the run. Full suite: 232 passed."
     },
     {
       "step": 4,
