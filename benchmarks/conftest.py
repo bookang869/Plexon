@@ -12,8 +12,10 @@ import uuid
 import pytest_asyncio
 
 os.environ.setdefault("PLEXON_DATABASE_URL", "postgresql://plexon:plexon@localhost:5433/plexon")
+os.environ.setdefault("PLEXON_REDIS_URL", "redis://localhost:6379/0")
 
 from gateway.db import close_pool, get_pool, init_pool
+from gateway.redis_client import close_redis, get_redis, init_redis
 
 
 @pytest_asyncio.fixture
@@ -24,10 +26,19 @@ async def db_pool():
 
 
 @pytest_asyncio.fixture
+async def redis_client():
+    await init_redis()
+    yield get_redis()
+    await close_redis()
+
+
+@pytest_asyncio.fixture
 async def benchmark_team(db_pool):
     """A team with generous rpm/tpm limits and a large budget, so
     throughput/overhead/failover benchmarks aren't incidentally rate-limited
-    or budget-blocked by the very thing they're trying to measure.
+    or budget-blocked by the very thing they're trying to measure. Includes
+    claude-sonnet--fault-error (ADR-025's magic model-name fault trigger) so
+    the failover benchmark can use this same shared fixture.
     """
     team_id = f"team-benchmark-{uuid.uuid4().hex[:8]}"
     api_key = f"benchmark-key-{uuid.uuid4().hex}"
@@ -40,7 +51,7 @@ async def benchmark_team(db_pool):
         """,
         team_id,
         "Benchmark Team",
-        ["gpt-4o-mini", "claude-sonnet"],
+        ["gpt-4o-mini", "claude-sonnet", "claude-sonnet--fault-error"],
         1_000_000,
         100_000_000,
         "100000.00",
