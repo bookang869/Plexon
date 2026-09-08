@@ -228,6 +228,27 @@ async def test_breaker_opening_increments_transitions_and_sets_state_gauge(
     assert _sample("gateway_circuit_breaker_state", {"provider": breaker_provider}) == 2
 
 
+# --- gateway_overhead_seconds ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_successful_request_increments_overhead_histogram(client, seeded_team):
+    before_count = _sample("gateway_overhead_seconds_count", {"route": "chat_completion"})
+    before_sum = _sample("gateway_overhead_seconds_sum", {"route": "chat_completion"})
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi there"}]},
+        headers=_auth_headers(seeded_team["api_key"]),
+    )
+    assert resp.status_code == 200
+
+    after_count = _sample("gateway_overhead_seconds_count", {"route": "chat_completion"})
+    after_sum = _sample("gateway_overhead_seconds_sum", {"route": "chat_completion"})
+    assert after_count == before_count + 1
+    assert after_sum > before_sum
+
+
 # --- /metrics endpoint ---------------------------------------------------------
 
 

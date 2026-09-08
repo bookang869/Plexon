@@ -48,3 +48,9 @@ gateway_circuit_breaker_transitions_total = Counter(
     "Total circuit breaker state transitions",
     ["provider", "from_state", "to_state"],
 )
+
+gateway_overhead_seconds = Histogram(
+    "gateway_overhead_seconds",
+    "Gateway-only processing time (total request time minus the provider-call span), in seconds",
+    ["route"],
+)
