@@ -197,7 +197,7 @@ python3 scripts/setup_demo_teams.py              # seed demo teams with varied r
 
 ## Build Plan
 
-Implementation is split into 5 [Harness](.claude/commands/harness.md) phases, each on its own `feat-{phase}` branch, run via `scripts/execute.py`:
+Implementation is split into 5 [Harness](.claude/commands/harness.md) phases covering the original build plan, plus a `benchmarks` phase added afterward, each on its own `feat-{phase}` branch, run via `scripts/execute.py`:
 
 | # | Phase | Covers | Status |
 |---|---|---|---|
@@ -206,8 +206,39 @@ Implementation is split into 5 [Harness](.claude/commands/harness.md) phases, ea
 | 2 | `resilience` | Health checks, fallback routing, retry/backoff, circuit breakers | ✅ merged |
 | 3 | `observability` | OTel spans, Prometheus metrics, Grafana dashboards, alerting | ✅ merged |
 | 4 | `test-load` | Integration test suite, Locust load test, full Docker Compose stack | 🔨 this PR |
+| 5 | `benchmarks` | Performance benchmark suite: throughput, gateway overhead, failover reliability/recovery, rate-limit/budget accuracy under concurrency | 🔨 this PR |
 
 A final polish phase (demo recording + narrative) is done manually, outside Harness.
+
+## Performance Benchmarks
+
+A manually-invoked suite (`benchmarks/`) that measures gateway performance against a live Docker Compose stack, giving a fast local regression signal separate from CI's correctness tests.
+
+**Prerequisites** — same as `tests/load/locustfile.py`'s: the full stack running and demo teams seeded:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build
+python3 scripts/setup_demo_teams.py
+```
+
+**What's measured:**
+- Sustained throughput (requests/sec) against `THROUGHPUT_MIN_RPS`
+- Gateway-only overhead latency (P50/P95/P99), read off the `gateway_overhead_seconds` Prometheus histogram
+- Failover reliability and switch latency when a provider starts failing
+- Circuit-breaker recovery latency after cooldown
+- Rate-limit admission accuracy and budget-overshoot bounds under concurrent load
+
+**How to run:**
+
+```bash
+uv run pytest benchmarks/ -m benchmark -v
+# or
+uv run python3 benchmarks/run_all.py
+```
+
+Results land in `benchmarks/results/*.json` and `*.csv` (gitignored, regenerated on each run).
+
+This suite is a fast, single-process, locally-run regression signal — it doesn't replace `tests/load/locustfile.py`, which remains the tool covering TRD §10's large-scale "5,000+ concurrent requests" requirement. Per [Non-Goals](#non-goals), raw throughput isn't this project's headline story; these benchmarks exist to catch regressions, not to make a performance claim.
 
 ## Non-Goals
 
