@@ -21,7 +21,10 @@
     {
       "step": 2,
       "name": "failover-trials",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-09T02:55:19+0900",
+      "summary": "Extracted _reset_anthropic_breaker(redis_client, db_pool) module-level helper (used by both the anthropic_breaker fixture and the per-trial reset) in benchmarks/bench_failover.py; test_failover_reliability_and_switch_latency now runs _OUTAGE_TRIALS (env-overridable PLEXON_BENCHMARK_FAILOVER_TRIALS, default 5) independent 20-request outage waves, resetting the breaker to closed before each trial, and writes failover_reliability.json with per-trial breakdown plus pooled overall_reliability_pct/total_requests_all_trials/switch-latency percentiles across all trials; test_circuit_breaker_recovery_latency untouched. README's failover bullet updated to mention the multi-trial aggregate.",
+      "completed_at": "2026-09-09T02:57:34+0900"
     },
     {
       "step": 3,
