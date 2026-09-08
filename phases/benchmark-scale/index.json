@@ -15,7 +15,8 @@
       "name": "overhead-sweep",
       "status": "completed",
       "started_at": "2026-09-09T02:51:34+0900",
-      "summary": "Extended bench_overhead.py to sweep concurrency [5,20,50,100,200] via PLEXON_BENCHMARK_SWEEP_CONCURRENCIES (mirroring step 0's bench_throughput.py pattern): factored warmup+before/after-metrics-diff logic into _measure_overhead_at_concurrency, renamed test to parametrized test_overhead_sweep writing gateway_overhead_c{N}.json per level with total_requests scaled to max(200, concurrency*10), only hard-asserts OVERHEAD_P95_MS at concurrency=5 (the calibrated level) while other levels report a passed field for visibility; added test_overhead_sweep_summary writing overhead_sweep_summary.json. README's overhead bullet updated to describe the sweep with concurrency=5 as the gate."
+      "summary": "Extended bench_overhead.py to sweep concurrency [5,20,50,100,200] via PLEXON_BENCHMARK_SWEEP_CONCURRENCIES (mirroring step 0's bench_throughput.py pattern): factored warmup+before/after-metrics-diff logic into _measure_overhead_at_concurrency, renamed test to parametrized test_overhead_sweep writing gateway_overhead_c{N}.json per level with total_requests scaled to max(200, concurrency*10), only hard-asserts OVERHEAD_P95_MS at concurrency=5 (the calibrated level) while other levels report a passed field for visibility; added test_overhead_sweep_summary writing overhead_sweep_summary.json. README's overhead bullet updated to describe the sweep with concurrency=5 as the gate.",
+      "completed_at": "2026-09-09T02:55:19+0900"
     },
     {
       "step": 2,
