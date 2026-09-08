@@ -13,7 +13,10 @@
     {
       "step": 1,
       "name": "gateway-overhead-metric",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-08T08:56:57+0900",
+      "summary": "Added gateway_overhead_seconds histogram (metrics.py) observed in routes.py's two success branches only (non-streaming, right after call_with_resilience; streaming, right after resolve_streaming_start) as max(0.0, (now - request_started) - elapsed), with request_started captured at the very top of create_chat_completion; extended tests/test_metrics.py with a count/sum before-after test; added benchmarks/bench_overhead.py (concurrency=5, 200 requests after 10 warmup, against a fast gpt-4o-mini mock model over real HTTP) which snapshots /metrics before and after its own load and diffs each histogram bucket to isolate this run's own observations from the process-lifetime-cumulative metric (a long-lived container's history otherwise pollutes any single post-load snapshot), then asserts p95 against thresholds.OVERHEAD_P95_MS (20ms) -- measured p50 ~7-18ms, p95 ~13-18ms, p99 ~24-38ms across repeated runs, passing. Full suite: 232 passed.",
+      "completed_at": "2026-09-07T17:18:09-0700"
     },
     {
       "step": 2,
