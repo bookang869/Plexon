@@ -45,7 +45,7 @@ services:
     volumes:
       - ./tempo/tempo.yaml:/etc/tempo.yaml
     ports:
-      - "4317:4317"
+      - "4327:4317"
       - "3200:3200"
 
   gateway:
@@ -88,7 +88,7 @@ services:
   grafana:
     image: grafana/grafana:latest
     ports:
-      - "3000:3000"
+      - "3001:3000"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
     environment:
