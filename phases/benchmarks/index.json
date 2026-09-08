@@ -24,7 +24,7 @@
       "status": "completed",
       "started_at": "2026-09-08T09:19:01+0900",
       "summary": "Added benchmarks/bench_throughput.py's test_sustained_throughput (module docstring explicitly distinguishes it from tests/load/locustfile.py's OS-level 5,000+ concurrent-user Locust load test, not a substitute for TRD §10) using run_concurrent(..., duration_seconds=...) in sustained-load mode, concurrency and duration overridable via PLEXON_BENCHMARK_CONCURRENCY/PLEXON_BENCHMARK_DURATION_SECONDS env vars (small smoke defaults: concurrency=10, duration=5s), achieved_rps computed against actual measured wall-clock time (not the requested duration_seconds); no new rpm/tpm/budget values introduced -- step 0's benchmark_team fixture headroom was already generous enough. Default smoke run measured ~77 RPS / 0 errors against thresholds.THROUGHPUT_MIN_RPS (50 RPS), passing. Full suite: 232 passed.",
-      "completed_at": "2026-09-08T09:35:00+0900"
+      "completed_at": "2026-09-08T09:32:13+0900"
     },
     {
       "step": 3,
