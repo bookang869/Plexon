@@ -222,7 +222,7 @@ python3 scripts/setup_demo_teams.py
 ```
 
 **What's measured:**
-- Sustained throughput (requests/sec) against `THROUGHPUT_MIN_RPS`
+- Sustained throughput as a concurrency sweep (5 → 20 → 50 → 100 → 200 workers), reporting the maximum concurrency/RPS sustained with zero errors against `THROUGHPUT_MIN_RPS`
 - Gateway-only overhead latency (P50/P95/P99), read off the `gateway_overhead_seconds` Prometheus histogram
 - Failover reliability and switch latency when a provider starts failing
 - Circuit-breaker recovery latency after cooldown
