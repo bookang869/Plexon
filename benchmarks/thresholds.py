@@ -61,3 +61,17 @@ RATELIMIT_ADMIT_TOLERANCE = 0.1
 # before the hard block takes effect -- bounded by the cost of the single
 # in-flight request that pushed spend over 100%, not an ongoing leak.
 BUDGET_OVERSHOOT_MAX_PCT = 5.0
+
+# Max p95 client-observed latency (ms) for *rejected* (429) responses under
+# the rpm admission-accuracy benchmark -- a rejection is just auth plus a
+# single Redis EVAL (gateway/ratelimit/token_bucket.py), no provider call and
+# no spend_ledger write, so its own work is trivial. In practice the
+# dominant cost is Postgres connection-pool contention: every request --
+# admitted or not -- needs a pool connection for the auth lookup
+# (gateway/auth/team_auth.py), and asyncpg's default pool (gateway/db.py) is
+# only 10 connections, so a few-hundred-request burst queues meaningfully
+# for a slot behind admitted requests' longer-held connections. Measured
+# p95 ~1.4s / p99 ~1.5s at 200 concurrent requests against a 30 rpm_limit on
+# a dev-machine Docker Compose stack; this constant leaves real headroom
+# above that baseline rather than asserting rejections are instant.
+RATELIMIT_REJECTION_P95_MAX_MS = 2500.0

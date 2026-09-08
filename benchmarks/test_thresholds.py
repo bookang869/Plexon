@@ -19,6 +19,7 @@ def test_all_threshold_constants_are_positive_numbers():
         "RECOVERY_MAX_SECONDS_OVER_COOLDOWN",
         "RATELIMIT_ADMIT_TOLERANCE",
         "BUDGET_OVERSHOOT_MAX_PCT",
+        "RATELIMIT_REJECTION_P95_MAX_MS",
     ]
     for name in names:
         value = getattr(thresholds, name)
