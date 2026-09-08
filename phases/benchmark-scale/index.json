@@ -37,7 +37,9 @@
     {
       "step": 4,
       "name": "budget-overshoot-investigation",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-09T03:26:51+0900",
+      "summary": "Added ADR-028 to docs/ADR.md documenting the confirmed root cause of the ~3% budget overshoot benchmarked in bench_ratelimit_budget.py: check_budget reads Redis spend before the provider call while record_spend's INCRBYFLOAT only runs after, so concurrent requests in the same window can all observe pre-request spend and get admitted -- a check-then-act race (not atomic like the rate-limit token bucket, since request cost is unknown until the provider responds). Decision: accept the bounded overshoot per ADR-002's scope framing rather than building an atomic reserve-then-confirm scheme now; existing benchmark remains the regression signal. No code files changed (gateway/ratelimit/budget.py, gateway/routes.py, benchmarks/bench_ratelimit_budget.py untouched)."
     }
   ],
   "created_at": "2026-09-09T02:40:54+0900"
