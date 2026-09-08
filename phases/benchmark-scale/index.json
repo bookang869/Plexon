@@ -7,7 +7,8 @@
       "name": "throughput-sweep",
       "status": "completed",
       "started_at": "2026-09-09T02:40:54+0900",
-      "summary": "Replaced single-concurrency test_sustained_throughput with a parametrized test_throughput_sweep([5,20,50,100,200]) plus test_throughput_sweep_summary in benchmarks/bench_throughput.py; per-level results write to benchmarks/results/throughput_c{N}.json (no hard threshold assert), summary picks the highest zero-error-rate level as max_sustainable_concurrency/rps and asserts it clears THROUGHPUT_MIN_RPS. README's throughput bullet updated to describe the sweep."
+      "summary": "Replaced single-concurrency test_sustained_throughput with a parametrized test_throughput_sweep([5,20,50,100,200]) plus test_throughput_sweep_summary in benchmarks/bench_throughput.py; per-level results write to benchmarks/results/throughput_c{N}.json (no hard threshold assert), summary picks the highest zero-error-rate level as max_sustainable_concurrency/rps and asserts it clears THROUGHPUT_MIN_RPS. README's throughput bullet updated to describe the sweep.",
+      "completed_at": "2026-09-09T02:51:34+0900"
     },
     {
       "step": 1,
