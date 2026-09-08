@@ -37,7 +37,10 @@
     {
       "step": 4,
       "name": "ratelimit-budget-benchmark",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-08T09:40:43+0900",
+      "summary": "Added benchmarks/bench_ratelimit_budget.py's test_rpm_admission_accuracy_at_higher_concurrency (200 concurrent requests, rpm_limit=30, tpm effectively unlimited, over a dedicated raised-connection-limit httpx client to avoid client-side pool queuing skewing the measurement) and test_budget_overshoot_under_concurrency (40-concurrent wave against a daily_budget_usd sized to 97% of the wave's full cost so worst-case overshoot_pct is bounded regardless of race outcome, plus a second 5-request wave confirming uniform 402 rejection once settled), each with local _insert_team/_delete_team helpers (not the shared benchmark_team fixture) sized specifically for their crossing point; added thresholds.RATELIMIT_REJECTION_P95_MAX_MS (2500ms, calibrated after measuring real Postgres connection-pool contention under the 200-request burst -- p95 ~1.4-1.7s since every request, admitted or rejected, needs a pool connection for auth against asyncpg's default 10-connection pool) and extended test_thresholds.py's coverage list. Measured: rpm admission exactly 30/30 (no over/under-admission) with rejection p95 ~1.4-1.7s (<2500ms threshold); budget overshoot consistently ~3.09% (<5% threshold, all 40 requests raced through admission every run) with the second wave uniformly rejected -- both passing across repeated runs. Full suite: 232 passed; ruff clean.",
+      "completed_at": "2026-09-08T09:58:00+0900"
     },
     {
       "step": 5,
