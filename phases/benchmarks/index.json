@@ -45,10 +45,10 @@
     {
       "step": 5,
       "name": "runner-and-docs",
-      "status": "error",
+      "status": "completed",
       "started_at": "2026-09-08T09:55:16+0900",
-      "error_message": "[failed after 3 attempts] Step did not update status",
-      "failed_at": "2026-09-08T10:37:47+0900"
+      "summary": "Added benchmarks/run_all.py (invokes pytest.main([\"-m\", \"benchmark\", ...]) then reads back every benchmarks/results/*.json to print one combined PASS/FAIL summary table, returning pytest's own exit code) plus benchmarks/test_run_all.py unit-testing the aggregation helper against fixture JSON; added README.md's ## Performance Benchmarks section (prerequisites, what's measured, how to run, results location, explicit distinction from tests/load/locustfile.py) and a benchmarks row in ## Build Plan, with the preceding sentence reworded to note benchmarks was added after the original 5-phase plan. The prior 3 failed attempts never touched run_all.py/README correctness -- they crashed because step5.md's own AC command order tears down the full docker-compose stack (Postgres/Redis/mocks) *before* running `pytest -v`, which then fails ~114 DB/Redis-dependent tests with connection errors; CI avoids this by starting Postgres/Redis directly as GitHub Actions services rather than through the full compose stack. Verified manually with the stack kept up through pytest: ruff clean, run_all.py aggregates and exits non-zero correctly when a benchmark's threshold assertion fails, and the full non-benchmark suite passes 234/234 on a freshly-started stack (232 base + this step's 2 new run_all.py unit tests).",
+      "completed_at": "2026-09-08T14:03:27+0900"
     }
   ],
   "created_at": "2026-09-08T08:47:17+0900"
