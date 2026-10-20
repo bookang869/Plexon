@@ -8,7 +8,7 @@ Callers talk to Plexon exactly like they'd talk to OpenAI's Chat Completions API
 
 ## Status
 
-Phases 0 (`proxy-layer`), 1 (`ratelimit-budget`), 2 (`resilience`), and 3 (`observability`) are merged; phase 4 (`test-load`) is complete and in this PR — a demo-teams seed script, an integration test suite proving rate-limiting/budget/fallback/circuit-breaker behavior under real concurrent load, a GitHub Actions CI workflow running that suite against real Redis/Postgres/mock-provider containers on every push, and a Locust load test exercising the full stack. This is the last automated Harness phase — see [Build Plan](#build-plan) below.
+Phases 0–4 (`proxy-layer` through `test-load`) are merged into `main` — unified proxy, rate limiting/budgets, resilience/fallback, observability, and a CI-backed integration + load-test suite. Phases 5 (`benchmarks`) and 6 (`benchmark-scale`) are complete but not yet merged — they're the performance-benchmark suite and its concurrency-scale hardening, currently sitting on `feat-benchmarks`/`feat-benchmark-scale`. See [Build Plan](#build-plan) for the phase-by-phase status, [Demo](#demo) for a real transcript of the resilience path, and [Performance Benchmarks](#performance-benchmarks) for numbers from an actual run.
 
 ## Why This Project
 
@@ -197,7 +197,7 @@ python3 scripts/setup_demo_teams.py              # seed demo teams with varied r
 
 ## Build Plan
 
-Implementation is split into 5 [Harness](.claude/commands/harness.md) phases covering the original build plan, plus a `benchmarks` phase added afterward, each on its own `feat-{phase}` branch, run via `scripts/execute.py`:
+Implementation is split into 5 [Harness](.claude/commands/harness.md) phases covering the original build plan, plus `benchmarks` and `benchmark-scale` phases added afterward, each on its own `feat-{phase}` branch, run via `scripts/execute.py`:
 
 | # | Phase | Covers | Status |
 |---|---|---|---|
@@ -205,10 +205,23 @@ Implementation is split into 5 [Harness](.claude/commands/harness.md) phases cov
 | 1 | `ratelimit-budget` | Token buckets, budget caps, tiered limits, admin API | ✅ merged |
 | 2 | `resilience` | Health checks, fallback routing, retry/backoff, circuit breakers | ✅ merged |
 | 3 | `observability` | OTel spans, Prometheus metrics, Grafana dashboards, alerting | ✅ merged |
-| 4 | `test-load` | Integration test suite, Locust load test, full Docker Compose stack | 🔨 this PR |
-| 5 | `benchmarks` | Performance benchmark suite: throughput, gateway overhead, failover reliability/recovery, rate-limit/budget accuracy under concurrency | 🔨 this PR |
+| 4 | `test-load` | Integration test suite, Locust load test, full Docker Compose stack | ✅ merged |
+| 5 | `benchmarks` | Performance benchmark suite: throughput, gateway overhead, failover reliability/recovery, rate-limit/budget accuracy under concurrency | ✅ complete, unmerged (`feat-benchmarks`) |
+| 6 | `benchmark-scale` | Concurrency-sweep scale testing for throughput/overhead/failover/rate-limit benchmarks, plus a budget-overshoot root-cause investigation (ADR-028) | ✅ complete, unmerged (`feat-benchmark-scale`) |
 
-A final polish phase (demo recording + narrative) is done manually, outside Harness.
+A final polish phase (demo recording + narrative) is done manually, outside Harness — see [Demo](#demo) below.
+
+## Demo
+
+A real, runnable transcript showing the resilience path end to end: a request routed to the primary provider, the primary failing, the circuit breaker opening, the fallback provider serving traffic, and the breaker recovering after cooldown — with latency evidence (retry cost visibly dropping once the breaker opens) pulled straight from the gateway's own Prometheus metrics, not narrated.
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build
+python3 scripts/setup_demo_teams.py
+uv run python3 scripts/demo_circuit_breaker_failover.py
+```
+
+Full transcript and walkthrough: [`docs/demos/circuit-breaker-failover.md`](docs/demos/circuit-breaker-failover.md).
 
 ## Performance Benchmarks
 
@@ -237,6 +250,23 @@ uv run python3 benchmarks/run_all.py
 ```
 
 Results land in `benchmarks/results/*.json` and `*.csv` (gitignored, regenerated on each run).
+
+**Results from an actual run** (2026-10-16, single Apple M4 / 24GB laptop, full stack in Docker Compose, mocked OpenAI/Anthropic providers per ADR-006 — no real API keys or network calls):
+
+| Concurrency | Achieved RPS | End-to-end P95 | Gateway-only overhead P95 |
+|---|---|---|---|
+| 5 | 356 | 20ms | **5ms** (the calibrated pass/fail gate) |
+| 20 | 420 | 70ms | 25ms |
+| 50 | 300 | 229ms | 59ms |
+| 100 | 275 | 578ms | 91ms |
+| 200 | 230 | 1,141ms | 75ms |
+
+- **Failover reliability:** 100% (100/100 requests across 5 independent outage trials) with a 381ms median / 495ms P95 switch latency from primary failure to a successful fallback response.
+- **Circuit-breaker recovery:** ~30s after a sustained outage, matching the configured 30s cooldown — one healthy probe is enough to close the breaker again (see the [Demo](#demo) above for a live transcript).
+- **Rate-limit admission accuracy:** 0 incorrect admissions across 10,000 pooled requests (50 trials × 200 concurrent), 602ms P95 rejection latency.
+- **Budget overshoot under concurrency:** ~3% over the cap at 40-way concurrency — a known, bounded check-then-act race documented in ADR-028, not a benchmark-code defect.
+
+Only concurrency=5 is a hard pass/fail gate (`OVERHEAD_P95_MS`); higher concurrency levels are reported for visibility, not asserted — gateway-only overhead rising with concurrency mostly reflects contention in this benchmark's own local client loop and the 10-connection Postgres pool, not necessarily the gateway itself. Per [Non-Goals](#non-goals), these numbers are a regression signal, not a performance claim — re-run `uv run pytest benchmarks/ -m benchmark -v` against your own hardware for current numbers.
 
 This suite is a fast, single-process, locally-run regression signal — it doesn't replace `tests/load/locustfile.py`, which remains the tool covering TRD §10's large-scale "5,000+ concurrent requests" requirement. Per [Non-Goals](#non-goals), raw throughput isn't this project's headline story; these benchmarks exist to catch regressions, not to make a performance claim.
 
