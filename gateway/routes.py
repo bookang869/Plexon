@@ -22,6 +22,7 @@ from gateway.observability.metrics import (
     gateway_cost_usd_total,
     gateway_errors_total,
     gateway_latency_seconds,
+    gateway_overhead_seconds,
     gateway_requests_total,
     gateway_tokens_total,
 )
@@ -87,6 +88,8 @@ async def create_chat_completion(
     team: Team = Depends(get_current_team),
     x_priority: str | None = Header(default=None, alias="X-Priority"),
 ) -> ChatCompletionResponse | StreamingResponse:
+    request_started = time.monotonic()
+
     # TRD §3 step 3 (rate-limit check) runs before step 5/6 (enrichment,
     # provider selection) below -- ADR-020's X-Priority header, defaulting to
     # "realtime", picks the tier; ADR-011's per-tier ceiling is enforced via
@@ -144,6 +147,8 @@ async def create_chat_completion(
             elapsed = time.monotonic() - call_started
             gateway_latency_seconds.labels(provider=serving_provider).observe(elapsed)
             await record_request_outcome(get_redis(), serving_provider, success=True, latency_ms=elapsed * 1000)
+            overhead = max(0.0, (time.monotonic() - request_started) - elapsed)
+            gateway_overhead_seconds.labels(route="chat_completion").observe(overhead)
         except RetryableProviderError as exc:
             # Same reasoning as the non-streaming branch below -- every
             # candidate was exhausted or skipped before producing any output,
@@ -200,6 +205,8 @@ async def create_chat_completion(
         elapsed = time.monotonic() - call_started
         gateway_latency_seconds.labels(provider=serving_provider).observe(elapsed)
         await record_request_outcome(get_redis(), serving_provider, success=True, latency_ms=elapsed * 1000)
+        overhead = max(0.0, (time.monotonic() - request_started) - elapsed)
+        gateway_overhead_seconds.labels(route="chat_completion").observe(overhead)
     except RetryableProviderError as exc:
         # Every candidate in the primary+fallback chain was exhausted or
         # skipped (breaker open) -- surface as 503 so callers know it's worth

@@ -24,6 +24,16 @@
       "dir": "test-load",
       "status": "completed",
       "completed_at": "2026-09-03T11:25:00+0900"
+    },
+    {
+      "dir": "benchmarks",
+      "status": "completed",
+      "completed_at": "2026-09-08T14:03:27+0900"
+    },
+    {
+      "dir": "benchmark-scale",
+      "status": "completed",
+      "completed_at": "2026-09-09T03:28:52+0900"
     }
   ]
 }

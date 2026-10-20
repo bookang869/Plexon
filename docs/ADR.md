@@ -292,6 +292,16 @@ PRD Phase 6 (demo recording + narrative) is done manually and is not encoded as 
 
 ---
 
+### ADR-028: Budget Enforcement — Accept Bounded Check-Then-Act Overshoot
+
+**Context:** `gateway/ratelimit/budget.py`'s `check_budget` reads the team's Redis spend counter and decides admit/block *before* the provider call; `record_spend`'s `INCRBYFLOAT` only runs afterward, once `gateway/routes.py` has already built the response (TRD §3 steps 4 and 9). Unlike ADR-011's rate-limit token bucket, this is check-then-act rather than a single atomic operation, because the cost of a request isn't known until the provider has answered -- there's no per-request token to atomically decrement the way `check_and_consume` decrements rate-limit tokens. Concurrent requests admitted within the same narrow window can all observe the same pre-request spend and all get admitted before any of them records. `benchmarks/bench_ratelimit_budget.py`'s `test_budget_overshoot_under_concurrency` measures and bounds this: a 40-request concurrent wave against a tightly-sized cap produces ~3% overshoot, well under `thresholds.BUDGET_OVERSHOOT_MAX_PCT` (5%).
+
+**Decision:** Accept the bounded overshoot as documented, known behavior rather than redesigning budget admission to be atomic (e.g. a Redis-EVAL reserve-then-confirm scheme, reserving an estimated cost at check time and reconciling against actual cost after the provider responds) right now. Per ADR-002's framing -- production-grade behavior where it's the point of the project, not uniformly everywhere -- rate limiting is the primitive that specifically needed atomic, per-request admission (ADR-011); budget enforcement's looser, bounded-overshoot guarantee is an accepted tradeoff, not an oversight.
+
+**Consequences:** Overshoot is bounded by the cost of however many requests are in flight at the moment spend crosses the cap, not an unbounded or ongoing leak -- confirmed structurally (check-then-act race window) and empirically (~3% at 40-concurrency). `test_budget_overshoot_under_concurrency` continues to run as a regression signal against `BUDGET_OVERSHOOT_MAX_PCT`, so a future change that widens the race would be caught. Revisit with an atomic reserve-based design if this project's scope, or a real deployment, ever requires a harder budget guarantee than "bounded by in-flight concurrency."
+
+---
+
 ## Implementation Notes (Not Formal Decisions)
 
 Lower-stakes choices settled as working assumptions rather than dedicated ADRs:

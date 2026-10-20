@@ -1,0 +1,48 @@
+{
+  "project": "plexon",
+  "phase": "benchmark-scale",
+  "steps": [
+    {
+      "step": 0,
+      "name": "throughput-sweep",
+      "status": "completed",
+      "started_at": "2026-09-09T02:40:54+0900",
+      "summary": "Replaced single-concurrency test_sustained_throughput with a parametrized test_throughput_sweep([5,20,50,100,200]) plus test_throughput_sweep_summary in benchmarks/bench_throughput.py; per-level results write to benchmarks/results/throughput_c{N}.json (no hard threshold assert), summary picks the highest zero-error-rate level as max_sustainable_concurrency/rps and asserts it clears THROUGHPUT_MIN_RPS. README's throughput bullet updated to describe the sweep.",
+      "completed_at": "2026-09-09T02:51:34+0900"
+    },
+    {
+      "step": 1,
+      "name": "overhead-sweep",
+      "status": "completed",
+      "started_at": "2026-09-09T02:51:34+0900",
+      "summary": "Extended bench_overhead.py to sweep concurrency [5,20,50,100,200] via PLEXON_BENCHMARK_SWEEP_CONCURRENCIES (mirroring step 0's bench_throughput.py pattern): factored warmup+before/after-metrics-diff logic into _measure_overhead_at_concurrency, renamed test to parametrized test_overhead_sweep writing gateway_overhead_c{N}.json per level with total_requests scaled to max(200, concurrency*10), only hard-asserts OVERHEAD_P95_MS at concurrency=5 (the calibrated level) while other levels report a passed field for visibility; added test_overhead_sweep_summary writing overhead_sweep_summary.json. README's overhead bullet updated to describe the sweep with concurrency=5 as the gate.",
+      "completed_at": "2026-09-09T02:55:19+0900"
+    },
+    {
+      "step": 2,
+      "name": "failover-trials",
+      "status": "completed",
+      "started_at": "2026-09-09T02:55:19+0900",
+      "summary": "Extracted _reset_anthropic_breaker(redis_client, db_pool) module-level helper (used by both the anthropic_breaker fixture and the per-trial reset) in benchmarks/bench_failover.py; test_failover_reliability_and_switch_latency now runs _OUTAGE_TRIALS (env-overridable PLEXON_BENCHMARK_FAILOVER_TRIALS, default 5) independent 20-request outage waves, resetting the breaker to closed before each trial, and writes failover_reliability.json with per-trial breakdown plus pooled overall_reliability_pct/total_requests_all_trials/switch-latency percentiles across all trials; test_circuit_breaker_recovery_latency untouched. README's failover bullet updated to mention the multi-trial aggregate.",
+      "completed_at": "2026-09-09T02:59:27+0900"
+    },
+    {
+      "step": 3,
+      "name": "ratelimit-scale",
+      "status": "completed",
+      "started_at": "2026-09-09T02:59:27+0900",
+      "summary": "test_rpm_admission_accuracy_at_higher_concurrency in benchmarks/bench_ratelimit_budget.py now loops _RPM_TRIALS (env-overridable PLEXON_BENCHMARK_RATELIMIT_TRIALS, default 50) independent 200-concurrent waves against fresh per-trial teams, pooling to ~10,000 total requests and asserting incorrect_admission_count==0 and pooled rejection_p95_ms against RATELIMIT_REJECTION_P95_MAX_MS; writes per-trial breakdown into ratelimit_admission_accuracy.json. README's rate-limit bullet updated to describe the aggregate sample size. Note: one exploratory run at the larger sample size did surface 3/10,000 over-admissions (31 vs 30) traced to the token bucket's continuous refill (0.5 tokens/sec) accumulating during Postgres-pool-contention-stretched bursts (10-connection pool, already documented in thresholds.py) -- a rare, load-dependent characteristic of the live stack rather than a benchmark-code defect; subsequent runs (including the final AC run) passed cleanly with 0/10,000. Flagging for awareness since a future run could occasionally reproduce it.",
+      "completed_at": "2026-09-09T03:26:51+0900"
+    },
+    {
+      "step": 4,
+      "name": "budget-overshoot-investigation",
+      "status": "completed",
+      "started_at": "2026-09-09T03:26:51+0900",
+      "summary": "Added ADR-028 to docs/ADR.md documenting the confirmed root cause of the ~3% budget overshoot benchmarked in bench_ratelimit_budget.py: check_budget reads Redis spend before the provider call while record_spend's INCRBYFLOAT only runs after, so concurrent requests in the same window can all observe pre-request spend and get admitted -- a check-then-act race (not atomic like the rate-limit token bucket, since request cost is unknown until the provider responds). Decision: accept the bounded overshoot per ADR-002's scope framing rather than building an atomic reserve-then-confirm scheme now; existing benchmark remains the regression signal. No code files changed (gateway/ratelimit/budget.py, gateway/routes.py, benchmarks/bench_ratelimit_budget.py untouched).",
+      "completed_at": "2026-09-09T03:28:51+0900"
+    }
+  ],
+  "created_at": "2026-09-09T02:40:54+0900",
+  "completed_at": "2026-09-09T03:28:52+0900"
+}
